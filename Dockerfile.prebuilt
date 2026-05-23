@@ -1,0 +1,13 @@
+# Pre-built image: assumes server-linux-amd64 has already been compiled on the host.
+# Use this when you don't want to (or can't) compile inside the container.
+#
+# Usage:
+#   docker build -f Dockerfile.prebuilt -t yaml-sync:latest .
+#
+FROM rockylinux:9-minimal
+COPY server-linux-amd64 /usr/local/bin/yaml-sync
+RUN chmod +x /usr/local/bin/yaml-sync
+ENV TZ=Asia/Shanghai
+EXPOSE 8080
+VOLUME /data
+CMD ["yaml-sync"]

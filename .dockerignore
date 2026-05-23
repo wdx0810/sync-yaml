@@ -1,0 +1,8 @@
+node_modules
+web/node_modules
+web/dist
+cmd/server/web/dist
+.kiro
+.git
+*.exe
+server.exe
