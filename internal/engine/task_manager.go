@@ -441,7 +441,13 @@ func (m *taskManager) finishTask(task *store.SyncTask, direction, namespace stri
 	} else {
 		task.LastSyncResult = fmt.Sprintf("成功: %d/%d 已同步", info.Synced, info.Total)
 	}
-	task.Status = "running"
+	// Preserve current Status. Whether the task is currently running
+	// (scheduled/auto loop) or paused (manual trigger on a stopped task) is
+	// authoritative state — do NOT clobber it here. Re-read from the store so
+	// we don't accidentally overwrite a Pause that happened mid-sync.
+	if cur, err := m.taskStore.Get(task.ID); err == nil {
+		task.Status = cur.Status
+	}
 	task.ErrorMessage = ""
 	_ = m.taskStore.Update(task.ID, task)
 
