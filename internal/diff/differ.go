@@ -155,7 +155,8 @@ func MaskSecretData(obj *unstructured.Unstructured) *unstructured.Unstructured {
 
 // IsSameContent checks if two resources have the same content (ignoring runtime fields).
 //
-// It uses JSON serialization rather than reflect.DeepEqual on the raw map, because:
+// Uses JSON-normalized comparison rather than reflect.DeepEqual on the raw map,
+// because:
 //   - K8s API server returns numbers as int64
 //   - sigs.k8s.io/yaml decodes via JSON so produces float64
 //   - reflect.DeepEqual treats int64(80) != float64(80)
@@ -176,15 +177,27 @@ func IsSameContent(c cleaner.Cleaner, old, new *unstructured.Unstructured) bool 
 	return string(oldJSON) == string(newJSON)
 }
 
-// normalize recursively coerces numeric types to a canonical form so that
-// JSON-marshaled output is stable regardless of decoder origin (yaml.v3 vs
-// sigs.k8s.io/yaml vs K8s API server).
+// normalize recursively coerces numeric types to a canonical form so JSON-marshaled
+// output is stable regardless of decoder origin (yaml.v3 vs sigs.k8s.io/yaml vs K8s API).
+// Also strips known noise: empty maps/slices, nil values.
 func normalize(v interface{}) interface{} {
 	switch x := v.(type) {
 	case map[string]interface{}:
 		out := make(map[string]interface{}, len(x))
 		for k, vv := range x {
-			out[k] = normalize(vv)
+			nv := normalize(vv)
+			// Drop nil and empty containers — they make round-trip diffs noisy
+			// (e.g. status: {} vs status absent, or x: null vs x absent).
+			if nv == nil {
+				continue
+			}
+			if m, ok := nv.(map[string]interface{}); ok && len(m) == 0 {
+				continue
+			}
+			if s, ok := nv.([]interface{}); ok && len(s) == 0 {
+				continue
+			}
+			out[k] = nv
 		}
 		return out
 	case []interface{}:
