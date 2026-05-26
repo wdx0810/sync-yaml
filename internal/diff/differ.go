@@ -1,6 +1,7 @@
 package diff
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
@@ -153,6 +154,12 @@ func MaskSecretData(obj *unstructured.Unstructured) *unstructured.Unstructured {
 }
 
 // IsSameContent checks if two resources have the same content (ignoring runtime fields).
+//
+// It uses JSON serialization rather than reflect.DeepEqual on the raw map, because:
+//   - K8s API server returns numbers as int64
+//   - sigs.k8s.io/yaml decodes via JSON so produces float64
+//   - reflect.DeepEqual treats int64(80) != float64(80)
+// JSON marshaling normalizes both sides, eliminating the type mismatch.
 func IsSameContent(c cleaner.Cleaner, old, new *unstructured.Unstructured) bool {
 	cleanOld := c.Clean(old)
 	cleanNew := c.Clean(new)
@@ -160,7 +167,43 @@ func IsSameContent(c cleaner.Cleaner, old, new *unstructured.Unstructured) bool 
 	oldSpec := extractComparableFields(cleanOld)
 	newSpec := extractComparableFields(cleanNew)
 
-	return reflect.DeepEqual(oldSpec, newSpec)
+	oldJSON, err1 := json.Marshal(normalize(oldSpec))
+	newJSON, err2 := json.Marshal(normalize(newSpec))
+	if err1 != nil || err2 != nil {
+		// Fall back to deep-equal if marshaling fails for any reason.
+		return reflect.DeepEqual(oldSpec, newSpec)
+	}
+	return string(oldJSON) == string(newJSON)
+}
+
+// normalize recursively coerces numeric types to a canonical form so that
+// JSON-marshaled output is stable regardless of decoder origin (yaml.v3 vs
+// sigs.k8s.io/yaml vs K8s API server).
+func normalize(v interface{}) interface{} {
+	switch x := v.(type) {
+	case map[string]interface{}:
+		out := make(map[string]interface{}, len(x))
+		for k, vv := range x {
+			out[k] = normalize(vv)
+		}
+		return out
+	case []interface{}:
+		out := make([]interface{}, len(x))
+		for i, vv := range x {
+			out[i] = normalize(vv)
+		}
+		return out
+	case int:
+		return float64(x)
+	case int32:
+		return float64(x)
+	case int64:
+		return float64(x)
+	case float32:
+		return float64(x)
+	default:
+		return v
+	}
 }
 
 // unused import guard
