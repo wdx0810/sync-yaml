@@ -79,14 +79,26 @@ func cleanByKind(obj *unstructured.Unstructured) {
 		} {
 			unstructured.RemoveNestedField(obj.Object, "spec", f)
 		}
+		// `type: ClusterIP` is the API-server default — drop when present.
+		if spec, ok := obj.Object["spec"].(map[string]interface{}); ok {
+			dropIfEqual(spec, "type", "ClusterIP")
+		}
 		if ports, found, _ := unstructured.NestedSlice(obj.Object, "spec", "ports"); found {
 			for _, p := range ports {
 				if pm, ok := p.(map[string]interface{}); ok {
 					delete(pm, "nodePort")
-					// `protocol: TCP` and `targetPort: <same as port>` are defaulted
-					// by the API server. Drop only when they match defaults.
+					// `protocol: TCP` is defaulted.
 					if v, ok := pm["protocol"]; ok && v == "TCP" {
 						delete(pm, "protocol")
+					}
+					// `targetPort` defaults to the same value as `port`. Drop it
+					// when they match so YAML authored without targetPort matches
+					// the server-defaulted form.
+					if tp, ok := pm["targetPort"]; ok {
+						port := pm["port"]
+						if numEqual(port, tp) {
+							delete(pm, "targetPort")
+						}
 					}
 				}
 			}
@@ -324,6 +336,31 @@ func cleanContainer(c map[string]interface{}) {
 
 func isAutoSAVolume(name string) bool {
 	return strings.HasPrefix(name, "kube-api-access-") || strings.HasPrefix(name, "default-token-")
+}
+
+// numEqual returns true if two values are numerically equal, accounting for the
+// many numeric types YAML/JSON decoders may emit (int / int64 / float64 / json.Number).
+func numEqual(a, b interface{}) bool {
+	an, aok := toInt64(a)
+	bn, bok := toInt64(b)
+	if aok && bok {
+		return an == bn
+	}
+	return false
+}
+
+func toInt64(v interface{}) (int64, bool) {
+	switch n := v.(type) {
+	case int:
+		return int64(n), true
+	case int32:
+		return int64(n), true
+	case int64:
+		return n, true
+	case float64:
+		return int64(n), n == float64(int64(n))
+	}
+	return 0, false
 }
 
 // dropIfEqual deletes the key if its value matches the given default string.
