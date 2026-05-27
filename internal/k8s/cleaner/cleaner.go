@@ -140,18 +140,19 @@ func cleanByKind(obj *unstructured.Unstructured) {
 // strategy.type: RollingUpdate (with default rollingUpdate maxSurge/maxUnavailable).
 func dropDeploymentDefaults(obj *unstructured.Unstructured) {
 	specPath := []string{"spec"}
+	spec, found, _ := unstructured.NestedMap(obj.Object, specPath...)
+	if !found {
+		return
+	}
 
 	// `revisionHistoryLimit: 10` is the server default for Deployment/StatefulSet/DaemonSet.
-	if v, found, _ := unstructured.NestedInt64(obj.Object, append(specPath, "revisionHistoryLimit")...); found && v == 10 {
-		unstructured.RemoveNestedField(obj.Object, append(specPath, "revisionHistoryLimit")...)
-	}
+	// Use dropIfEqualInt to handle both int64 (from K8s API) and float64 (from sigs.yaml parser).
+	dropIfEqualInt(spec, "revisionHistoryLimit", 10)
 	// `progressDeadlineSeconds: 600` is the Deployment default.
-	if v, found, _ := unstructured.NestedInt64(obj.Object, append(specPath, "progressDeadlineSeconds")...); found && v == 600 {
-		unstructured.RemoveNestedField(obj.Object, append(specPath, "progressDeadlineSeconds")...)
-	}
+	dropIfEqualInt(spec, "progressDeadlineSeconds", 600)
 
 	// strategy.rollingUpdate gets defaulted with maxSurge: 25%, maxUnavailable: 25%.
-	if strat, found, _ := unstructured.NestedMap(obj.Object, append(specPath, "strategy")...); found {
+	if strat, ok := spec["strategy"].(map[string]interface{}); ok {
 		if t, _ := strat["type"].(string); t == "RollingUpdate" {
 			if ru, ok := strat["rollingUpdate"].(map[string]interface{}); ok {
 				maxSurge, _ := ru["maxSurge"]
@@ -162,12 +163,14 @@ func dropDeploymentDefaults(obj *unstructured.Unstructured) {
 			}
 			// `strategy.type: RollingUpdate` is the default; drop if it's the only key left.
 			if len(strat) == 1 {
-				unstructured.RemoveNestedField(obj.Object, append(specPath, "strategy")...)
+				delete(spec, "strategy")
 			} else {
-				_ = unstructured.SetNestedMap(obj.Object, strat, append(specPath, "strategy")...)
+				spec["strategy"] = strat
 			}
 		}
 	}
+
+	_ = unstructured.SetNestedMap(obj.Object, spec, specPath...)
 }
 
 // dropJobControllerLabels strips the controller-uid label injected by the Job controller.
