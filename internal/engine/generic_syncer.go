@@ -118,8 +118,20 @@ func (s *GenericSyncer) PreviewForward(ctx context.Context, gc gitlab.Client, dc
 					oldYAML = string(b)
 				}
 			}
-			newYAMLBytes, _ := s.parser.Print(res)
+			// Clean the GitLab side too, so the diff view is symmetric.
+			// Without this, fields like `progressDeadlineSeconds: 600`,
+			// `creationTimestamp: null`, `imagePullPolicy: IfNotPresent` show up
+			// on the right pane (cleaner skipped) but not the left (cleaner ran),
+			// producing a confusing fake diff. The unmodified GitLab YAML is
+			// preserved in RawYAML for actual application.
+			cleanNew := s.cleaner.Clean(res.Object)
+			newYAMLBytes, _ := s.parser.Print(&generic.Resource{Object: cleanNew})
 			newYAML := string(newYAMLBytes)
+
+			// Keep the original (uncleaned) YAML for Apply, so we send the user's
+			// authoritative GitLab YAML to K8s rather than our normalized version.
+			rawYAMLBytes, _ := s.parser.Print(res)
+			rawYAML := string(rawYAMLBytes)
 
 			pending = append(pending, PendingChange{
 				Kind:       res.Kind,
@@ -130,7 +142,7 @@ func (s *GenericSyncer) PreviewForward(ctx context.Context, gc gitlab.Client, dc
 				NewYAML:    newYAML,
 				APIVersion: res.GVR.Group + "/" + res.GVR.Version,
 				Namespaced: res.Namespaced,
-				RawYAML:    newYAML,
+				RawYAML:    rawYAML,
 			})
 		}
 	}
