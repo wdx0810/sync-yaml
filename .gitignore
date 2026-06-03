@@ -41,3 +41,10 @@ config.local.yaml
 config.local.yml
 .env
 .env.local
+
+# Patent documents (confidential, keep local only)
+专利*
+patent_figures/
+fill_patent.py
+draw_patent_figures.py
+rebuild_patent_docx.py
