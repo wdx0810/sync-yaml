@@ -302,7 +302,7 @@ func (s *GenericSyncer) ForwardSync(ctx context.Context, gc gitlab.Client, dc k8
 }
 
 // ReverseSync syncs resources from K8s to GitLab.
-func (s *GenericSyncer) ReverseSync(ctx context.Context, gc gitlab.Client, dc k8sdynamic.Client, source *store.GitLabSource, target *store.K8sTarget, resourceTypes []string) *SyncResultInfo {
+func (s *GenericSyncer) ReverseSync(ctx context.Context, gc gitlab.Client, dc k8sdynamic.Client, source *store.GitLabSource, target *store.K8sTarget, resourceTypes []string, taskName string) *SyncResultInfo {
 	info := &SyncResultInfo{}
 
 	namespaces := strings.Split(target.Namespace, ",")
@@ -407,7 +407,7 @@ func (s *GenericSyncer) ReverseSync(ctx context.Context, gc gitlab.Client, dc k8
 			actions[i] = gitlab.FileCommitAction{Path: p.path, Content: p.content}
 		}
 
-		commitMsg := fmt.Sprintf("Sync from K8s: %d resource(s)", len(pending))
+		commitMsg := fmt.Sprintf("[%s] Sync from K8s: %d resource(s)", taskName, len(pending))
 		if err := gc.CommitFiles(ctx, actions, commitMsg); err != nil {
 			// If batch commit fails, mark all as failed.
 			for _, p := range pending {

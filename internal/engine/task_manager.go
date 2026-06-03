@@ -424,7 +424,7 @@ func (m *taskManager) doSync(ctx context.Context, task *store.SyncTask, gc gitla
 	case "forward":
 		info = syncer.ForwardSync(ctx, gc, dc, &effectiveSource, &effectiveTarget, resourceTypes)
 	case "reverse":
-		info = syncer.ReverseSync(ctx, gc, dc, &effectiveSource, &effectiveTarget, resourceTypes)
+		info = syncer.ReverseSync(ctx, gc, dc, &effectiveSource, &effectiveTarget, resourceTypes, task.Name)
 	default:
 		m.setTaskError(task, "unknown direction: "+dir)
 		return &SyncResultInfo{Errors: []string{"unknown direction"}}
