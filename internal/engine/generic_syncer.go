@@ -526,6 +526,12 @@ func shouldSkipResource(kind, namespace, name string, obj *unstructured.Unstruct
 			secretType == "helm.sh/release.v1" {
 			return true
 		}
+		// Skip well-known platform-managed secrets (e.g. Huawei CCE ELB certs).
+		if name == "default-secret" || name == "paas-elb" ||
+			strings.HasPrefix(name, "default-token-") ||
+			strings.HasPrefix(name, "sh.helm.release") {
+			return true
+		}
 	case "Service":
 		// The default `kubernetes` service in `default` namespace is cluster-managed.
 		if namespace == "default" && name == "kubernetes" {
