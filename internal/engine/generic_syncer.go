@@ -527,7 +527,7 @@ func shouldSkipResource(kind, namespace, name string, obj *unstructured.Unstruct
 			return true
 		}
 		// Skip well-known platform-managed secrets (e.g. Huawei CCE ELB certs).
-		if name == "default-secret" || name == "paas-elb" ||
+		if name == "default-secret" || name == "paas-elb" || name == "paas.elb" ||
 			strings.HasPrefix(name, "default-token-") ||
 			strings.HasPrefix(name, "sh.helm.release") {
 			return true
