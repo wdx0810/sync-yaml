@@ -78,6 +78,8 @@ export interface SyncTask {
   syncMode: string;
   interval: number;
   resourceTypes?: string[];
+  includeFilter?: string;
+  excludeFilter?: string;
   status: string;
   lastSyncTime: string;
   lastSyncResult: string;

@@ -37,6 +37,8 @@ type SyncTask struct {
 	SyncMode       string   `json:"syncMode"`
 	Interval       int      `json:"interval"`
 	ResourceTypes  []string `json:"resourceTypes,omitempty"`
+	IncludeFilter  string   `json:"includeFilter,omitempty"`
+	ExcludeFilter  string   `json:"excludeFilter,omitempty"`
 	Status         string   `json:"status"`
 	LastSyncTime   string   `json:"lastSyncTime"`
 	LastSyncResult string   `json:"lastSyncResult"`

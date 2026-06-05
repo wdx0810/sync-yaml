@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 	"sync"
 
@@ -28,6 +29,31 @@ type GenericSyncer struct {
 	differ       diff.Differ
 	pathProvider path.Provider
 	logger       *slog.Logger
+}
+
+// NameFilter holds include/exclude regex patterns for resource name filtering.
+type NameFilter struct {
+	Include string // regex: only sync resources whose name matches (empty = all)
+	Exclude string // regex: skip resources whose name matches
+}
+
+// matchesNameFilter returns true if the resource name passes the include/exclude filter.
+func matchesNameFilter(name string, filter NameFilter) bool {
+	// Include filter: if set, name must match.
+	if filter.Include != "" {
+		matched, err := regexp.MatchString(filter.Include, name)
+		if err != nil || !matched {
+			return false
+		}
+	}
+	// Exclude filter: if set, name must NOT match.
+	if filter.Exclude != "" {
+		matched, err := regexp.MatchString(filter.Exclude, name)
+		if err == nil && matched {
+			return false
+		}
+	}
+	return true
 }
 
 // NewGenericSyncer creates a new generic syncer.
@@ -65,7 +91,7 @@ type PendingChange struct {
 
 // PreviewForward builds a list of changes that would be applied, without touching K8s.
 // Uses concurrent workers for K8s Get calls to handle large resource counts efficiently.
-func (s *GenericSyncer) PreviewForward(ctx context.Context, gc gitlab.Client, dc k8sdynamic.Client, source *store.GitLabSource, target *store.K8sTarget, resourceTypes []string) ([]PendingChange, *SyncResultInfo, error) {
+func (s *GenericSyncer) PreviewForward(ctx context.Context, gc gitlab.Client, dc k8sdynamic.Client, source *store.GitLabSource, target *store.K8sTarget, resourceTypes []string, filter NameFilter) ([]PendingChange, *SyncResultInfo, error) {
 	info := &SyncResultInfo{}
 
 	files, err := gc.FetchFiles(ctx, source.Path)
@@ -90,6 +116,10 @@ func (s *GenericSyncer) PreviewForward(ctx context.Context, gc gitlab.Client, dc
 		for _, res := range resources {
 			info.Total++
 			if !s.matchesResourceTypes(res.Kind, resourceTypes) {
+				info.Skipped++
+				continue
+			}
+			if !matchesNameFilter(res.Name, filter) {
 				info.Skipped++
 				continue
 			}
@@ -261,7 +291,7 @@ func (s *GenericSyncer) ApplyChanges(ctx context.Context, dc k8sdynamic.Client, 
 }
 
 // ForwardSync syncs resources from GitLab to K8s.
-func (s *GenericSyncer) ForwardSync(ctx context.Context, gc gitlab.Client, dc k8sdynamic.Client, source *store.GitLabSource, target *store.K8sTarget, resourceTypes []string) *SyncResultInfo {
+func (s *GenericSyncer) ForwardSync(ctx context.Context, gc gitlab.Client, dc k8sdynamic.Client, source *store.GitLabSource, target *store.K8sTarget, resourceTypes []string, filter NameFilter) *SyncResultInfo {
 	info := &SyncResultInfo{}
 
 	files, err := gc.FetchFiles(ctx, source.Path)
@@ -285,6 +315,12 @@ func (s *GenericSyncer) ForwardSync(ctx context.Context, gc gitlab.Client, dc k8
 			if !s.matchesResourceTypes(res.Kind, resourceTypes) {
 				info.Skipped++
 				info.SkippedNames = append(info.SkippedNames, fmt.Sprintf("%s/%s (%s filtered)", res.Namespace, res.Name, res.Kind))
+				continue
+			}
+
+			// Filter by name (include/exclude regex).
+			if !matchesNameFilter(res.Name, filter) {
+				info.Skipped++
 				continue
 			}
 
@@ -353,7 +389,7 @@ func (s *GenericSyncer) ForwardSync(ctx context.Context, gc gitlab.Client, dc k8
 }
 
 // ReverseSync syncs resources from K8s to GitLab.
-func (s *GenericSyncer) ReverseSync(ctx context.Context, gc gitlab.Client, dc k8sdynamic.Client, source *store.GitLabSource, target *store.K8sTarget, resourceTypes []string, taskName string) *SyncResultInfo {
+func (s *GenericSyncer) ReverseSync(ctx context.Context, gc gitlab.Client, dc k8sdynamic.Client, source *store.GitLabSource, target *store.K8sTarget, resourceTypes []string, taskName string, filter NameFilter) *SyncResultInfo {
 	info := &SyncResultInfo{}
 
 	namespaces := strings.Split(target.Namespace, ",")
@@ -407,6 +443,11 @@ func (s *GenericSyncer) ReverseSync(ctx context.Context, gc gitlab.Client, dc k8
 				// Skip K8s-managed resources that should never be synced
 				// (auto-created bookkeeping, controller-owned children, etc.).
 				if shouldSkipResource(kind, ns, name, obj) {
+					continue
+				}
+
+				// User-defined name filter (include/exclude regex).
+				if !matchesNameFilter(name, filter) {
 					continue
 				}
 

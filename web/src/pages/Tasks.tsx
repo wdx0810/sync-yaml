@@ -267,6 +267,12 @@ export default function Tasks() {
           <Form.Item name="resourceTypes" label="资源类型" initialValue={['All']}>
             <ResourceTypeSelector />
           </Form.Item>
+          <Form.Item name="includeFilter" label="包含过滤（正则）" tooltip="只同步名称匹配的资源，为空则全部包含。例如：lion-.*">
+            <Input placeholder="例如: lion-.* 或 tsp-app-.* （留空=全部）" />
+          </Form.Item>
+          <Form.Item name="excludeFilter" label="排除过滤（正则）" tooltip="跳过名称匹配的资源。例如：system:.*|everest-.*|cce-.*">
+            <Input placeholder="例如: system:.*|everest-.*|kube-.* （留空=不排除）" />
+          </Form.Item>
         </Form>
       </Modal>
 

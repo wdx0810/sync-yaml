@@ -223,7 +223,7 @@ func (m *taskManager) PreviewSync(taskID string) (*PreviewResult, error) {
 	}
 
 	ctx := context.Background()
-	changes, summary, err := syncer.PreviewForward(ctx, gc, dc, &effectiveSource, &effectiveTarget, resourceTypes)
+	changes, summary, err := syncer.PreviewForward(ctx, gc, dc, &effectiveSource, &effectiveTarget, resourceTypes, NameFilter{Include: task.IncludeFilter, Exclude: task.ExcludeFilter})
 	if err != nil {
 		return nil, err
 	}
@@ -422,9 +422,9 @@ func (m *taskManager) doSync(ctx context.Context, task *store.SyncTask, gc gitla
 
 	switch dir {
 	case "forward":
-		info = syncer.ForwardSync(ctx, gc, dc, &effectiveSource, &effectiveTarget, resourceTypes)
+		info = syncer.ForwardSync(ctx, gc, dc, &effectiveSource, &effectiveTarget, resourceTypes, NameFilter{Include: task.IncludeFilter, Exclude: task.ExcludeFilter})
 	case "reverse":
-		info = syncer.ReverseSync(ctx, gc, dc, &effectiveSource, &effectiveTarget, resourceTypes, task.Name)
+		info = syncer.ReverseSync(ctx, gc, dc, &effectiveSource, &effectiveTarget, resourceTypes, task.Name, NameFilter{Include: task.IncludeFilter, Exclude: task.ExcludeFilter})
 	default:
 		m.setTaskError(task, "unknown direction: "+dir)
 		return &SyncResultInfo{Errors: []string{"unknown direction"}}
