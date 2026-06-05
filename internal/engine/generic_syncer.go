@@ -597,6 +597,17 @@ func shouldSkipResource(kind, namespace, name string, obj *unstructured.Unstruct
 		case "kube-system", "kube-public", "kube-node-lease", "default":
 			return true
 		}
+	case "ClusterRole", "ClusterRoleBinding":
+		// Skip K8s built-in system roles (system:*, kubeadm:*, etc.)
+		if strings.HasPrefix(name, "system:") ||
+			strings.HasPrefix(name, "kubeadm:") ||
+			strings.HasPrefix(name, "calico") ||
+			strings.HasPrefix(name, "flannel") ||
+			strings.HasPrefix(name, "csi-") ||
+			strings.HasPrefix(name, "everest-") ||
+			strings.HasPrefix(name, "kube-") {
+			return true
+		}
 	}
 
 	return false
