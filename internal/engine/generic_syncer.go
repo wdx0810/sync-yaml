@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
@@ -63,15 +64,22 @@ type PendingChange struct {
 }
 
 // PreviewForward builds a list of changes that would be applied, without touching K8s.
+// Uses concurrent workers for K8s Get calls to handle large resource counts efficiently.
 func (s *GenericSyncer) PreviewForward(ctx context.Context, gc gitlab.Client, dc k8sdynamic.Client, source *store.GitLabSource, target *store.K8sTarget, resourceTypes []string) ([]PendingChange, *SyncResultInfo, error) {
 	info := &SyncResultInfo{}
-	var pending []PendingChange
 
 	files, err := gc.FetchFiles(ctx, source.Path)
 	if err != nil {
 		info.Errors = append(info.Errors, fmt.Sprintf("fetch files: %v", err))
 		return nil, info, err
 	}
+
+	// Phase 1: Parse all resources (CPU-bound, fast).
+	type parsedResource struct {
+		res *generic.Resource
+		ns  string
+	}
+	var allResources []parsedResource
 
 	for _, f := range files {
 		resources, err := s.parser.ParseMulti(f.Content)
@@ -81,13 +89,10 @@ func (s *GenericSyncer) PreviewForward(ctx context.Context, gc gitlab.Client, dc
 		}
 		for _, res := range resources {
 			info.Total++
-
 			if !s.matchesResourceTypes(res.Kind, resourceTypes) {
 				info.Skipped++
-				info.SkippedNames = append(info.SkippedNames, fmt.Sprintf("%s/%s (%s filtered)", res.Namespace, res.Name, res.Kind))
 				continue
 			}
-
 			ns := res.Namespace
 			if ns == "" {
 				ns = target.Namespace
@@ -97,53 +102,99 @@ func (s *GenericSyncer) PreviewForward(ctx context.Context, gc gitlab.Client, dc
 			}
 			res.Object.SetResourceVersion("")
 			res.Object.SetManagedFields(nil)
+			allResources = append(allResources, parsedResource{res: res, ns: ns})
+		}
+	}
 
-			existing, getErr := dc.Get(ctx, ns, res.GVR, res.Name)
-			if getErr == nil {
-				if diff.IsSameContent(s.cleaner, existing, res.Object) {
-					info.Skipped++
-					info.SkippedNames = append(info.SkippedNames, fmt.Sprintf("%s/%s (%s)", ns, res.Name, res.Kind))
-					continue
+	// Phase 2: Concurrent K8s Get + comparison (I/O-bound, slow without concurrency).
+	type compareResult struct {
+		idx     int
+		change  *PendingChange
+		skipped bool
+	}
+
+	const maxWorkers = 20
+	workers := maxWorkers
+	if len(allResources) < workers {
+		workers = len(allResources)
+	}
+	if workers == 0 {
+		return nil, info, nil
+	}
+
+	jobs := make(chan int, len(allResources))
+	results := make(chan compareResult, len(allResources))
+
+	// Start workers.
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for idx := range jobs {
+				pr := allResources[idx]
+				res := pr.res
+				ns := pr.ns
+
+				existing, getErr := dc.Get(ctx, ns, res.GVR, res.Name)
+				if getErr == nil {
+					if diff.IsSameContent(s.cleaner, existing, res.Object) {
+						results <- compareResult{idx: idx, skipped: true}
+						continue
+					}
 				}
-			}
 
-			action := "updated"
-			var oldYAML string
-			if getErr != nil {
-				action = "created"
-			}
-			if existing != nil {
-				cleanOld := s.cleaner.Clean(existing)
-				if b, e := s.parser.Print(&generic.Resource{Object: cleanOld}); e == nil {
-					oldYAML = string(b)
+				action := "updated"
+				var oldYAML string
+				if getErr != nil {
+					action = "created"
 				}
+				if existing != nil {
+					cleanOld := s.cleaner.Clean(existing)
+					if b, e := s.parser.Print(&generic.Resource{Object: cleanOld}); e == nil {
+						oldYAML = string(b)
+					}
+				}
+				cleanNew := s.cleaner.Clean(res.Object)
+				newYAMLBytes, _ := s.parser.Print(&generic.Resource{Object: cleanNew})
+				newYAML := string(newYAMLBytes)
+				rawYAMLBytes, _ := s.parser.Print(res)
+				rawYAML := string(rawYAMLBytes)
+
+				results <- compareResult{idx: idx, change: &PendingChange{
+					Kind:       res.Kind,
+					Namespace:  ns,
+					Name:       res.Name,
+					Action:     action,
+					OldYAML:    oldYAML,
+					NewYAML:    newYAML,
+					APIVersion: res.GVR.Group + "/" + res.GVR.Version,
+					Namespaced: res.Namespaced,
+					RawYAML:    rawYAML,
+				}}
 			}
-			// Clean the GitLab side too, so the diff view is symmetric.
-			// Without this, fields like `progressDeadlineSeconds: 600`,
-			// `creationTimestamp: null`, `imagePullPolicy: IfNotPresent` show up
-			// on the right pane (cleaner skipped) but not the left (cleaner ran),
-			// producing a confusing fake diff. The unmodified GitLab YAML is
-			// preserved in RawYAML for actual application.
-			cleanNew := s.cleaner.Clean(res.Object)
-			newYAMLBytes, _ := s.parser.Print(&generic.Resource{Object: cleanNew})
-			newYAML := string(newYAMLBytes)
+		}()
+	}
 
-			// Keep the original (uncleaned) YAML for Apply, so we send the user's
-			// authoritative GitLab YAML to K8s rather than our normalized version.
-			rawYAMLBytes, _ := s.parser.Print(res)
-			rawYAML := string(rawYAMLBytes)
+	// Send jobs.
+	for i := range allResources {
+		jobs <- i
+	}
+	close(jobs)
 
-			pending = append(pending, PendingChange{
-				Kind:       res.Kind,
-				Namespace:  ns,
-				Name:       res.Name,
-				Action:     action,
-				OldYAML:    oldYAML,
-				NewYAML:    newYAML,
-				APIVersion: res.GVR.Group + "/" + res.GVR.Version,
-				Namespaced: res.Namespaced,
-				RawYAML:    rawYAML,
-			})
+	// Wait and close results.
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	// Collect results.
+	var pending []PendingChange
+	for r := range results {
+		if r.skipped {
+			info.Skipped++
+		} else if r.change != nil {
+			pending = append(pending, *r.change)
 		}
 	}
 
