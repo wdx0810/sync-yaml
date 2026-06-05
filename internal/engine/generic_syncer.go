@@ -232,60 +232,108 @@ func (s *GenericSyncer) PreviewForward(ctx context.Context, gc gitlab.Client, dc
 }
 
 // ApplyChanges applies a pre-approved list of changes to K8s.
+// Uses 10 concurrent workers for faster bulk apply.
 func (s *GenericSyncer) ApplyChanges(ctx context.Context, dc k8sdynamic.Client, changes []PendingChange) *SyncResultInfo {
 	info := &SyncResultInfo{Total: len(changes)}
 
-	for _, ch := range changes {
-		// Re-parse the YAML to rebuild the resource object.
-		resources, err := s.parser.ParseMulti([]byte(ch.RawYAML))
-		if err != nil || len(resources) == 0 {
-			info.Failed++
-			info.FailedNames = append(info.FailedNames, fmt.Sprintf("%s/%s (%s)", ch.Namespace, ch.Name, ch.Kind))
-			parseErr := "empty document"
-			if err != nil {
-				parseErr = err.Error()
+	type applyResult struct {
+		synced bool
+		name   string
+		detail history.ChangeDetail
+		err    string
+	}
+
+	const applyWorkers = 10
+	workers := applyWorkers
+	if len(changes) < workers {
+		workers = len(changes)
+	}
+	if workers == 0 {
+		return info
+	}
+
+	jobs := make(chan int, len(changes))
+	results := make(chan applyResult, len(changes))
+
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for idx := range jobs {
+				ch := changes[idx]
+				resources, err := s.parser.ParseMulti([]byte(ch.RawYAML))
+				if err != nil || len(resources) == 0 {
+					parseErr := "empty document"
+					if err != nil {
+						parseErr = err.Error()
+					}
+					s.logger.Error("apply parse failed", "ns", ch.Namespace, "kind", ch.Kind, "name", ch.Name, "error", parseErr)
+					results <- applyResult{err: fmt.Sprintf("parse %s/%s/%s: %s", ch.Namespace, ch.Kind, ch.Name, parseErr), name: fmt.Sprintf("%s/%s (%s)", ch.Namespace, ch.Name, ch.Kind)}
+					continue
+				}
+				res := resources[0]
+
+				if res.GVR.Resource == "" {
+					s.logger.Error("apply gvr unresolved", "ns", ch.Namespace, "kind", ch.Kind, "name", ch.Name)
+					results <- applyResult{err: fmt.Sprintf("%s/%s/%s: 无法解析资源类型", ch.Namespace, ch.Kind, ch.Name), name: fmt.Sprintf("%s/%s (%s)", ch.Namespace, ch.Name, ch.Kind)}
+					continue
+				}
+
+				ns := ch.Namespace
+				if res.Namespaced {
+					res.Object.SetNamespace(ns)
+				}
+				res.Object.SetResourceVersion("")
+				res.Object.SetManagedFields(nil)
+
+				if err := dc.Apply(ctx, ns, res.GVR, res.Object); err != nil {
+					s.logger.Error("apply failed", "ns", ns, "kind", ch.Kind, "name", ch.Name, "error", err)
+					results <- applyResult{
+						err:  fmt.Sprintf("%s/%s/%s: %v", ns, ch.Kind, ch.Name, err),
+						name: fmt.Sprintf("%s/%s (%s)", ns, ch.Name, ch.Kind),
+						detail: history.ChangeDetail{
+							Name: ch.Name, Namespace: ns, Kind: ch.Kind, Action: "failed", Error: err.Error(),
+						},
+					}
+					continue
+				}
+
+				results <- applyResult{
+					synced: true,
+					name:   fmt.Sprintf("%s/%s (%s)", ns, ch.Name, ch.Kind),
+					detail: history.ChangeDetail{
+						Name: ch.Name, Namespace: ns, Kind: ch.Kind, Action: ch.Action,
+						OldYAML: ch.OldYAML, NewYAML: ch.NewYAML,
+					},
+				}
 			}
-			info.Errors = append(info.Errors, fmt.Sprintf("parse %s/%s/%s: %s", ch.Namespace, ch.Kind, ch.Name, parseErr))
-			s.logger.Error("apply parse failed", "ns", ch.Namespace, "kind", ch.Kind, "name", ch.Name, "error", parseErr)
-			continue
-		}
-		res := resources[0]
+		}()
+	}
 
-		// If the parser couldn't resolve the GVR (builtin mapping miss + nil discovery),
-		// res.GVR.Resource is empty and dynamic client calls will fail with an
-		// opaque error. Surface this clearly.
-		if res.GVR.Resource == "" {
+	for i := range changes {
+		jobs <- i
+	}
+	close(jobs)
+
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	for r := range results {
+		if r.synced {
+			info.Synced++
+			info.SyncedNames = append(info.SyncedNames, r.name)
+			info.Details = append(info.Details, r.detail)
+		} else {
 			info.Failed++
-			info.FailedNames = append(info.FailedNames, fmt.Sprintf("%s/%s (%s)", ch.Namespace, ch.Name, ch.Kind))
-			info.Errors = append(info.Errors, fmt.Sprintf("%s/%s/%s: 无法解析资源类型 (apiVersion=%s)", ch.Namespace, ch.Kind, ch.Name, ch.APIVersion))
-			s.logger.Error("apply gvr unresolved", "ns", ch.Namespace, "kind", ch.Kind, "name", ch.Name, "apiVersion", ch.APIVersion)
-			continue
+			info.FailedNames = append(info.FailedNames, r.name)
+			info.Errors = append(info.Errors, r.err)
+			if r.detail.Name != "" {
+				info.Details = append(info.Details, r.detail)
+			}
 		}
-
-		ns := ch.Namespace
-		if res.Namespaced {
-			res.Object.SetNamespace(ns)
-		}
-		res.Object.SetResourceVersion("")
-		res.Object.SetManagedFields(nil)
-
-		s.logger.Info("applying", "ns", ns, "kind", ch.Kind, "name", ch.Name, "gvr", res.GVR.String())
-		if err := dc.Apply(ctx, ns, res.GVR, res.Object); err != nil {
-			info.Failed++
-			info.FailedNames = append(info.FailedNames, fmt.Sprintf("%s/%s (%s)", ns, ch.Name, ch.Kind))
-			info.Errors = append(info.Errors, fmt.Sprintf("%s/%s/%s: %v", ns, ch.Kind, ch.Name, err))
-			info.Details = append(info.Details, history.ChangeDetail{
-				Name: ch.Name, Namespace: ns, Kind: ch.Kind, Action: "failed", Error: err.Error(),
-			})
-			s.logger.Error("apply failed", "ns", ns, "kind", ch.Kind, "name", ch.Name, "error", err)
-			continue
-		}
-		info.Synced++
-		info.SyncedNames = append(info.SyncedNames, fmt.Sprintf("%s/%s (%s)", ns, ch.Name, ch.Kind))
-		info.Details = append(info.Details, history.ChangeDetail{
-			Name: ch.Name, Namespace: ns, Kind: ch.Kind, Action: ch.Action,
-			OldYAML: ch.OldYAML, NewYAML: ch.NewYAML,
-		})
 	}
 	return info
 }
