@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	gogitlab "github.com/xanzy/go-gitlab"
 )
@@ -94,6 +95,7 @@ func isYAMLFile(path string) bool {
 }
 
 // FetchFiles fetches all YAML files under the given path from GitLab.
+// Uses concurrent workers to fetch file contents in parallel.
 func (c *clientImpl) FetchFiles(ctx context.Context, path string) ([]FileContent, error) {
 	if path == "" {
 		path = c.basePath
@@ -110,32 +112,84 @@ func (c *clientImpl) FetchFiles(ctx context.Context, path string) ([]FileContent
 		},
 	}
 
-	var files []FileContent
+	// Phase 1: List all YAML file paths (fast, paginated).
+	var filePaths []string
 	for {
 		nodes, resp, err := c.gl.Repositories.ListTree(c.projectID, opts, gogitlab.WithContext(ctx))
 		if err != nil {
 			return nil, c.handleError("FetchFiles", err)
 		}
-
 		for _, node := range nodes {
 			if node.Type != "blob" || !isYAMLFile(node.Path) {
 				continue
 			}
-			content, err := c.getFileContent(ctx, node.Path)
-			if err != nil {
-				c.logger.Warn("failed to fetch file content", "path", node.Path, "error", err)
-				continue
-			}
-			files = append(files, FileContent{
-				Path:    node.Path,
-				Content: content,
-			})
+			filePaths = append(filePaths, node.Path)
 		}
-
 		if resp.NextPage == 0 {
 			break
 		}
 		opts.Page = resp.NextPage
+	}
+
+	// Phase 2: Fetch file contents concurrently (20 workers).
+	type fetchResult struct {
+		idx     int
+		content []byte
+		path    string
+		err     error
+	}
+
+	const fetchWorkers = 20
+	workers := fetchWorkers
+	if len(filePaths) < workers {
+		workers = len(filePaths)
+	}
+	if workers == 0 {
+		c.status = StatusConnected
+		return nil, nil
+	}
+
+	jobs := make(chan int, len(filePaths))
+	results := make(chan fetchResult, len(filePaths))
+
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for idx := range jobs {
+				fp := filePaths[idx]
+				content, err := c.getFileContent(ctx, fp)
+				results <- fetchResult{idx: idx, content: content, path: fp, err: err}
+			}
+		}()
+	}
+
+	for i := range filePaths {
+		jobs <- i
+	}
+	close(jobs)
+
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	// Collect results in order.
+	filesMap := make(map[int]FileContent)
+	for r := range results {
+		if r.err != nil {
+			c.logger.Warn("failed to fetch file content", "path", r.path, "error", r.err)
+			continue
+		}
+		filesMap[r.idx] = FileContent{Path: r.path, Content: r.content}
+	}
+
+	files := make([]FileContent, 0, len(filesMap))
+	for i := 0; i < len(filePaths); i++ {
+		if f, ok := filesMap[i]; ok {
+			files = append(files, f)
+		}
 	}
 
 	c.status = StatusConnected

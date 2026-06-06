@@ -159,7 +159,7 @@ func (s *GenericSyncer) PreviewForward(ctx context.Context, gc gitlab.Client, dc
 		listTargets[key] = true
 	}
 
-	// Perform List calls (much fewer than individual Gets — typically 5-20 calls total).
+	// Perform List calls concurrently (much fewer than individual Gets — typically 5-64 calls).
 	type indexKey struct {
 		gvr  string
 		ns   string
@@ -168,26 +168,59 @@ func (s *GenericSyncer) PreviewForward(ctx context.Context, gc gitlab.Client, dc
 	existingIndex := make(map[indexKey]*unstructured.Unstructured)
 
 	listStart := time.Now()
-	for lt := range listTargets {
-		// Find GVR from the first matching resource.
-		var gvr schema.GroupVersionResource
-		for _, pr := range allResources {
-			if pr.res.GVR.String() == lt.gvr {
-				gvr = pr.res.GVR
-				break
-			}
-		}
-		if gvr.Resource == "" {
-			continue
-		}
 
-		items, err := dc.List(ctx, lt.ns, gvr, "")
-		if err != nil {
-			s.logger.Warn("preview list failed", "gvr", lt.gvr, "ns", lt.ns, "error", err)
-			continue
-		}
-		for _, obj := range items {
-			key := indexKey{gvr: lt.gvr, ns: lt.ns, name: obj.GetName()}
+	type listResult struct {
+		key   listKey
+		items []*unstructured.Unstructured
+	}
+	listJobs := make(chan listKey, len(listTargets))
+	listResults := make(chan listResult, len(listTargets))
+
+	const listWorkers = 10
+	lw := listWorkers
+	if len(listTargets) < lw {
+		lw = len(listTargets)
+	}
+
+	var listWg sync.WaitGroup
+	for w := 0; w < lw; w++ {
+		listWg.Add(1)
+		go func() {
+			defer listWg.Done()
+			for lt := range listJobs {
+				var gvr schema.GroupVersionResource
+				for _, pr := range allResources {
+					if pr.res.GVR.String() == lt.gvr {
+						gvr = pr.res.GVR
+						break
+					}
+				}
+				if gvr.Resource == "" {
+					continue
+				}
+				items, err := dc.List(ctx, lt.ns, gvr, "")
+				if err != nil {
+					s.logger.Warn("preview list failed", "gvr", lt.gvr, "ns", lt.ns, "error", err)
+					continue
+				}
+				listResults <- listResult{key: lt, items: items}
+			}
+		}()
+	}
+
+	for lt := range listTargets {
+		listJobs <- lt
+	}
+	close(listJobs)
+
+	go func() {
+		listWg.Wait()
+		close(listResults)
+	}()
+
+	for lr := range listResults {
+		for _, obj := range lr.items {
+			key := indexKey{gvr: lr.key.gvr, ns: lr.key.ns, name: obj.GetName()}
 			existingIndex[key] = obj
 		}
 	}
