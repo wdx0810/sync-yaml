@@ -71,6 +71,7 @@ type QueryResult struct {
 type Store interface {
 	Save(record *SyncRecord) error
 	Query(filter QueryFilter) (*QueryResult, error)
+	GetRecord(id string) (*SyncRecord, error)
 	Flush() error
 }
 
@@ -175,8 +176,17 @@ func (s *fileStore) Query(filter QueryFilter) (*QueryResult, error) {
 		end = total
 	}
 
+	// Strip heavy fields (details with full YAML diffs) from list response.
+	// Users can fetch details for a specific record if needed.
+	pageRecords := results[start:end]
+	lightRecords := make([]SyncRecord, len(pageRecords))
+	for i, r := range pageRecords {
+		lightRecords[i] = r
+		lightRecords[i].Details = nil // Don't send full YAML diffs in list
+	}
+
 	return &QueryResult{
-		Records:  results[start:end],
+		Records:  lightRecords,
 		Total:    total,
 		Page:     page,
 		PageSize: pageSize,
@@ -199,6 +209,18 @@ func (s *fileStore) Flush() error {
 	s.logger.Info("flushed pending records to disk", "count", len(s.pending))
 	s.pending = nil
 	return nil
+}
+
+// GetRecord returns a single record with full details by ID.
+func (s *fileStore) GetRecord(id string) (*SyncRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, r := range s.records {
+		if r.ID == id {
+			return &r, nil
+		}
+	}
+	return nil, fmt.Errorf("record %q not found", id)
 }
 
 // matchesFilter checks if a record matches the given filter criteria.

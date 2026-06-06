@@ -142,6 +142,7 @@ func (s *Server) registerRoutes() {
 	api.HandleFunc("/drift-alerts", s.getDriftAlerts).Methods("GET")
 	api.HandleFunc("/drift-alerts/{id}/dismiss", s.dismissAlert).Methods("POST")
 	api.HandleFunc("/history", s.getHistory).Methods("GET")
+	api.HandleFunc("/history/{id}", s.getHistoryRecord).Methods("GET")
 	api.HandleFunc("/check-gitlab", s.checkGitLab).Methods("POST")
 	api.HandleFunc("/status", s.getStatus).Methods("GET")
 
@@ -396,6 +397,16 @@ func (s *Server) getHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) getHistoryRecord(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+	record, err := s.history.GetRecord(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, record)
 }
 
 func (s *Server) checkGitLab(w http.ResponseWriter, r *http.Request) {

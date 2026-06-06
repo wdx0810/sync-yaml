@@ -287,5 +287,6 @@ export const api = {
   getDriftAlerts: () => apiClient.get<DriftAlert[]>('/drift-alerts'),
   dismissAlert: (id: string) => apiClient.post(`/drift-alerts/${id}/dismiss`),
   getHistory: (params: HistoryFilter) => apiClient.get<SyncRecord[]>('/history', { params }),
+  getHistoryRecord: (id: string) => apiClient.get<SyncRecord>(`/history/${id}`),
   checkGitLab: () => apiClient.post('/check-gitlab'),
 };

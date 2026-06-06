@@ -54,9 +54,22 @@ export default function SyncHistory() {
     },
   ];
 
+  const [detailsCache, setDetailsCache] = useState<Record<string, any>>({});
+
+  const loadDetails = async (id: string) => {
+    if (detailsCache[id]) return;
+    try {
+      const res = await api.getHistoryRecord(id);
+      setDetailsCache(prev => ({ ...prev, [id]: (res.data as any).details || [] }));
+    } catch { /* ignore */ }
+  };
+
   const expandedRowRender = (record: SyncRecord) => {
-    const details = (record as any).details;
-    if (!details || details.length === 0) {
+    const details = detailsCache[record.id];
+    if (!details) {
+      return <span style={{ color: '#999' }}>加载中...</span>;
+    }
+    if (details.length === 0) {
       return <span style={{ color: '#999' }}>无详细变更记录</span>;
     }
 
@@ -152,7 +165,8 @@ export default function SyncHistory() {
         scroll={{ y: 'calc(100vh - 300px)' }}
         expandable={{
           expandedRowRender,
-          rowExpandable: (r) => !!(r as any).details?.length,
+          rowExpandable: () => true,
+          onExpand: (expanded, record) => { if (expanded) loadDetails(record.id); },
         }}
       />
     </div>
