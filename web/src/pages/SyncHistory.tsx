@@ -12,15 +12,30 @@ export default function SyncHistory() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<any>(null);
   const [filter, setFilter] = useState<HistoryFilter>({});
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
 
   const fetchHistory = async () => {
     setLoading(true); setError(null);
-    try { const res = await api.getHistory(filter); setRecords(res.data || []); }
+    try {
+      const res = await api.getHistory({ ...filter, page, pageSize });
+      const data = res.data as any;
+      if (data.records !== undefined) {
+        // Paginated response
+        setRecords(data.records || []);
+        setTotal(data.total || 0);
+      } else {
+        // Backward compat: old non-paginated response
+        setRecords(data || []);
+        setTotal((data || []).length);
+      }
+    }
     catch (e) { setError(e); }
     finally { setLoading(false); }
   };
 
-  useEffect(() => { fetchHistory(); }, [filter]);
+  useEffect(() => { fetchHistory(); }, [filter, page, pageSize]);
 
   const actionColor: Record<string, string> = { created: 'green', updated: 'blue', skipped: 'default', failed: 'red' };
 
@@ -126,7 +141,14 @@ export default function SyncHistory() {
         dataSource={records}
         rowKey="id"
         loading={loading}
-        pagination={{ pageSize: 20 }}
+        pagination={{
+          current: page,
+          pageSize: pageSize,
+          total: total,
+          showSizeChanger: true,
+          showTotal: (t) => `共 ${t} 条`,
+          onChange: (p, ps) => { setPage(p); setPageSize(ps); },
+        }}
         scroll={{ y: 'calc(100vh - 300px)' }}
         expandable={{
           expandedRowRender,

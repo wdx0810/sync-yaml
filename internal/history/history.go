@@ -55,15 +55,22 @@ type QueryFilter struct {
 	Direction string // "forward" | "reverse"
 	Since     *time.Time
 	Until     *time.Time
+	Page      int // 1-based, 0 means no pagination
+	PageSize  int // default 50
+}
+
+// QueryResult wraps paginated query results.
+type QueryResult struct {
+	Records []SyncRecord `json:"records"`
+	Total   int          `json:"total"`
+	Page    int          `json:"page"`
+	PageSize int         `json:"pageSize"`
 }
 
 // Store defines the interface for history record storage.
 type Store interface {
-	// Save persists a sync record.
 	Save(record *SyncRecord) error
-	// Query retrieves records matching the filter criteria.
-	Query(filter QueryFilter) ([]SyncRecord, error)
-	// Flush writes any in-memory cached records to disk.
+	Query(filter QueryFilter) (*QueryResult, error)
 	Flush() error
 }
 
@@ -102,6 +109,9 @@ func NewStore(storagePath string) (Store, error) {
 		s.logger.Warn("failed to load existing records", "error", err)
 	}
 
+	// Cleanup records older than 30 days.
+	s.cleanup30Days()
+
 	return s, nil
 }
 
@@ -112,17 +122,22 @@ func (s *fileStore) Save(record *SyncRecord) error {
 
 	s.records = append(s.records, *record)
 
+	// Periodically clean old records (every 100 saves).
+	if len(s.records)%100 == 0 {
+		s.cleanupLocked()
+	}
+
 	if err := s.writeRecords(); err != nil {
 		s.logger.Error("failed to write record to disk, caching in memory", "error", err)
 		s.pending = append(s.pending, *record)
-		return nil // Don't return error; record is cached in memory.
+		return nil
 	}
 
 	return nil
 }
 
-// Query retrieves records matching the filter criteria, sorted by timestamp descending.
-func (s *fileStore) Query(filter QueryFilter) ([]SyncRecord, error) {
+// Query retrieves records matching the filter criteria, with pagination.
+func (s *fileStore) Query(filter QueryFilter) (*QueryResult, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -139,7 +154,33 @@ func (s *fileStore) Query(filter QueryFilter) ([]SyncRecord, error) {
 		return results[i].Timestamp.After(results[j].Timestamp)
 	})
 
-	return results, nil
+	total := len(results)
+
+	// Apply pagination.
+	page := filter.Page
+	pageSize := filter.PageSize
+	if pageSize <= 0 {
+		pageSize = 50
+	}
+	if page <= 0 {
+		page = 1
+	}
+
+	start := (page - 1) * pageSize
+	if start >= total {
+		return &QueryResult{Records: []SyncRecord{}, Total: total, Page: page, PageSize: pageSize}, nil
+	}
+	end := start + pageSize
+	if end > total {
+		end = total
+	}
+
+	return &QueryResult{
+		Records:  results[start:end],
+		Total:    total,
+		Page:     page,
+		PageSize: pageSize,
+	}, nil
 }
 
 // Flush writes any in-memory cached records to disk.
@@ -214,4 +255,30 @@ func (s *fileStore) writeRecords() error {
 	}
 
 	return nil
+}
+
+// cleanup30Days removes records older than 30 days (thread-safe wrapper).
+func (s *fileStore) cleanup30Days() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cleanupLocked()
+}
+
+// cleanupLocked removes records older than 30 days. Must be called with lock held.
+func (s *fileStore) cleanupLocked() {
+	cutoff := time.Now().AddDate(0, 0, -30)
+	var kept []SyncRecord
+	removed := 0
+	for _, r := range s.records {
+		if r.Timestamp.Before(cutoff) {
+			removed++
+			continue
+		}
+		kept = append(kept, r)
+	}
+	if removed > 0 {
+		s.records = kept
+		_ = s.writeRecords()
+		s.logger.Info("cleaned old history records", "removed", removed, "remaining", len(kept))
+	}
 }

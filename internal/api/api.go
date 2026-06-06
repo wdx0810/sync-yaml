@@ -378,12 +378,24 @@ func (s *Server) getHistory(w http.ResponseWriter, r *http.Request) {
 		}
 		filter.Until = &t
 	}
-	records, err := s.history.Query(filter)
+	// Pagination.
+	page := 1
+	pageSize := 50
+	if p := r.URL.Query().Get("page"); p != "" {
+		fmt.Sscanf(p, "%d", &page)
+	}
+	if ps := r.URL.Query().Get("pageSize"); ps != "" {
+		fmt.Sscanf(ps, "%d", &pageSize)
+	}
+	filter.Page = page
+	filter.PageSize = pageSize
+
+	result, err := s.history.Query(filter)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, records)
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) checkGitLab(w http.ResponseWriter, r *http.Request) {

@@ -143,6 +143,8 @@ export interface HistoryFilter {
   direction?: string;
   since?: string;
   until?: string;
+  page?: number;
+  pageSize?: number;
 }
 
 export interface TestResult {
