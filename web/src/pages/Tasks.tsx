@@ -33,8 +33,12 @@ export default function Tasks() {
   const fetchAll = async () => {
     setLoading(true); setError(null);
     try {
-      const [t, s, tg] = await Promise.all([api.getTasks(), api.getSources(), api.getTargets()]);
-      setTasks(t.data || []); setSources(s.data || []); setTargets(tg.data || []);
+      const [t, s, tg] = await Promise.allSettled([api.getTasks(), api.getSources(), api.getTargets()]);
+      if (t.status === 'fulfilled') setTasks(t.value.data || []);
+      if (s.status === 'fulfilled') setSources(s.value.data || []);
+      if (tg.status === 'fulfilled') setTargets(tg.value.data || []);
+      // Show error only if tasks failed (primary data).
+      if (t.status === 'rejected') setError(t.reason);
     } catch (e) { setError(e); }
     finally { setLoading(false); }
   };
