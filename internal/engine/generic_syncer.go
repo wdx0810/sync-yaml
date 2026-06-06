@@ -124,8 +124,11 @@ func (s *GenericSyncer) PreviewForward(ctx context.Context, gc gitlab.Client, dc
 				continue
 			}
 			ns := res.Namespace
-			if ns == "" {
+			if ns == "" && res.Namespaced {
 				ns = target.Namespace
+			}
+			if !res.Namespaced {
+				ns = "" // cluster-scoped resources must use empty namespace
 			}
 			if res.Namespaced {
 				res.Object.SetNamespace(ns)
@@ -281,6 +284,9 @@ func (s *GenericSyncer) ApplyChanges(ctx context.Context, dc k8sdynamic.Client, 
 				}
 
 				ns := ch.Namespace
+				if !res.Namespaced {
+					ns = "" // cluster-scoped: empty namespace for API call
+				}
 				if res.Namespaced {
 					res.Object.SetNamespace(ns)
 				}
@@ -373,8 +379,11 @@ func (s *GenericSyncer) ForwardSync(ctx context.Context, gc gitlab.Client, dc k8
 			}
 
 			ns := res.Namespace
-			if ns == "" {
+			if ns == "" && res.Namespaced {
 				ns = target.Namespace
+			}
+			if !res.Namespaced {
+				ns = "" // cluster-scoped resources must use empty namespace
 			}
 
 			// Ensure the object's namespace matches the target namespace for Apply.
