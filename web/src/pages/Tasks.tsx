@@ -79,10 +79,12 @@ export default function Tasks() {
       if (info.skipped > 0) parts.push(`${info.skipped} 个无变更跳过`);
       if (info.failed > 0) parts.push(`${info.failed} 个失败`);
       let detail = parts.join(', ');
-      if (info.syncedNames?.length > 0) detail += '\n更新: ' + info.syncedNames.join(', ');
-      if (info.synced === 0 && info.failed === 0) message.info(detail);
-      else if (info.failed > 0) message.warning(detail);
-      else message.success(detail);
+      if (info.syncedNames?.length > 0) detail += '\n✓ 更新: ' + info.syncedNames.slice(0, 10).join(', ');
+      if (info.failedNames?.length > 0) detail += '\n✗ 失败: ' + info.failedNames.slice(0, 10).join(', ');
+      if (info.errors?.length > 0) detail += '\n错误详情: ' + info.errors.slice(0, 5).join('; ');
+      if (info.synced === 0 && info.failed === 0) message.info(detail, 8);
+      else if (info.failed > 0) message.warning(detail, 15);
+      else message.success(detail, 8);
     } else {
       message.success('同步完成');
     }
