@@ -7,8 +7,10 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/configmap-sync/configmap-sync/internal/diff"
 	"github.com/configmap-sync/configmap-sync/internal/gitlab"
@@ -93,6 +95,8 @@ type PendingChange struct {
 // Uses concurrent workers for K8s Get calls to handle large resource counts efficiently.
 func (s *GenericSyncer) PreviewForward(ctx context.Context, gc gitlab.Client, dc k8sdynamic.Client, source *store.GitLabSource, target *store.K8sTarget, resourceTypes []string, filter NameFilter) ([]PendingChange, *SyncResultInfo, error) {
 	info := &SyncResultInfo{}
+	startTime := time.Now()
+	s.logger.Info("preview started", "path", source.Path)
 
 	files, err := gc.FetchFiles(ctx, source.Path)
 	if err != nil {
@@ -100,7 +104,7 @@ func (s *GenericSyncer) PreviewForward(ctx context.Context, gc gitlab.Client, dc
 		return nil, info, err
 	}
 
-	// Phase 1: Parse all resources (CPU-bound, fast).
+	// Phase 1: Parse all resources from GitLab (CPU-bound, fast).
 	type parsedResource struct {
 		res *generic.Resource
 		ns  string
@@ -128,7 +132,7 @@ func (s *GenericSyncer) PreviewForward(ctx context.Context, gc gitlab.Client, dc
 				ns = target.Namespace
 			}
 			if !res.Namespaced {
-				ns = "" // cluster-scoped resources must use empty namespace
+				ns = ""
 			}
 			if res.Namespaced {
 				res.Object.SetNamespace(ns)
@@ -139,98 +143,105 @@ func (s *GenericSyncer) PreviewForward(ctx context.Context, gc gitlab.Client, dc
 		}
 	}
 
-	// Phase 2: Concurrent K8s Get + comparison (I/O-bound, slow without concurrency).
-	type compareResult struct {
-		idx     int
-		change  *PendingChange
-		skipped bool
+	s.logger.Info("preview parsed", "total", info.Total, "toCompare", len(allResources),
+		"parseTime", time.Since(startTime).String())
+
+	// Phase 2: Batch List — build an index of existing K8s resources.
+	// Key: "gvr|namespace|name" → *unstructured.Unstructured
+	type listKey struct {
+		gvr string
+		ns  string
+	}
+	// Determine unique GVR+NS combinations we need to list.
+	listTargets := make(map[listKey]bool)
+	for _, pr := range allResources {
+		key := listKey{gvr: pr.res.GVR.String(), ns: pr.ns}
+		listTargets[key] = true
 	}
 
-	const maxWorkers = 20
-	workers := maxWorkers
-	if len(allResources) < workers {
-		workers = len(allResources)
+	// Perform List calls (much fewer than individual Gets — typically 5-20 calls total).
+	type indexKey struct {
+		gvr  string
+		ns   string
+		name string
 	}
-	if workers == 0 {
-		return nil, info, nil
-	}
+	existingIndex := make(map[indexKey]*unstructured.Unstructured)
 
-	jobs := make(chan int, len(allResources))
-	results := make(chan compareResult, len(allResources))
-
-	// Start workers.
-	var wg sync.WaitGroup
-	for w := 0; w < workers; w++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for idx := range jobs {
-				pr := allResources[idx]
-				res := pr.res
-				ns := pr.ns
-
-				existing, getErr := dc.Get(ctx, ns, res.GVR, res.Name)
-				if getErr == nil {
-					if diff.IsSameContent(s.cleaner, existing, res.Object) {
-						results <- compareResult{idx: idx, skipped: true}
-						continue
-					}
-				}
-
-				action := "updated"
-				var oldYAML string
-				if getErr != nil {
-					action = "created"
-				}
-				if existing != nil {
-					cleanOld := s.cleaner.Clean(existing)
-					if b, e := s.parser.Print(&generic.Resource{Object: cleanOld}); e == nil {
-						oldYAML = string(b)
-					}
-				}
-				cleanNew := s.cleaner.Clean(res.Object)
-				newYAMLBytes, _ := s.parser.Print(&generic.Resource{Object: cleanNew})
-				newYAML := string(newYAMLBytes)
-				rawYAMLBytes, _ := s.parser.Print(res)
-				rawYAML := string(rawYAMLBytes)
-
-				results <- compareResult{idx: idx, change: &PendingChange{
-					Kind:       res.Kind,
-					Namespace:  ns,
-					Name:       res.Name,
-					Action:     action,
-					OldYAML:    oldYAML,
-					NewYAML:    newYAML,
-					APIVersion: res.GVR.Group + "/" + res.GVR.Version,
-					Namespaced: res.Namespaced,
-					RawYAML:    rawYAML,
-				}}
+	listStart := time.Now()
+	for lt := range listTargets {
+		// Find GVR from the first matching resource.
+		var gvr schema.GroupVersionResource
+		for _, pr := range allResources {
+			if pr.res.GVR.String() == lt.gvr {
+				gvr = pr.res.GVR
+				break
 			}
-		}()
-	}
+		}
+		if gvr.Resource == "" {
+			continue
+		}
 
-	// Send jobs.
-	for i := range allResources {
-		jobs <- i
-	}
-	close(jobs)
-
-	// Wait and close results.
-	go func() {
-		wg.Wait()
-		close(results)
-	}()
-
-	// Collect results.
-	var pending []PendingChange
-	for r := range results {
-		if r.skipped {
-			info.Skipped++
-		} else if r.change != nil {
-			pending = append(pending, *r.change)
+		items, err := dc.List(ctx, lt.ns, gvr, "")
+		if err != nil {
+			s.logger.Warn("preview list failed", "gvr", lt.gvr, "ns", lt.ns, "error", err)
+			continue
+		}
+		for _, obj := range items {
+			key := indexKey{gvr: lt.gvr, ns: lt.ns, name: obj.GetName()}
+			existingIndex[key] = obj
 		}
 	}
+	s.logger.Info("preview listed", "listCalls", len(listTargets), "indexSize", len(existingIndex),
+		"listTime", time.Since(listStart).String())
 
+	// Phase 3: Compare in-memory (no more API calls).
+	var pending []PendingChange
+	for _, pr := range allResources {
+		res := pr.res
+		ns := pr.ns
+		key := indexKey{gvr: res.GVR.String(), ns: ns, name: res.Name}
+
+		existing, found := existingIndex[key]
+		if found {
+			if diff.IsSameContent(s.cleaner, existing, res.Object) {
+				info.Skipped++
+				continue
+			}
+		}
+
+		action := "updated"
+		var oldYAML string
+		if !found {
+			action = "created"
+		}
+		if existing != nil {
+			cleanOld := s.cleaner.Clean(existing)
+			if b, e := s.parser.Print(&generic.Resource{Object: cleanOld}); e == nil {
+				oldYAML = string(b)
+			}
+		}
+		cleanNew := s.cleaner.Clean(res.Object)
+		newYAMLBytes, _ := s.parser.Print(&generic.Resource{Object: cleanNew})
+		newYAML := string(newYAMLBytes)
+		rawYAMLBytes, _ := s.parser.Print(res)
+		rawYAML := string(rawYAMLBytes)
+
+		pending = append(pending, PendingChange{
+			Kind:       res.Kind,
+			Namespace:  ns,
+			Name:       res.Name,
+			Action:     action,
+			OldYAML:    oldYAML,
+			NewYAML:    newYAML,
+			APIVersion: res.GVR.Group + "/" + res.GVR.Version,
+			Namespaced: res.Namespaced,
+			RawYAML:    rawYAML,
+		})
+	}
+
+	s.logger.Info("preview completed",
+		"total", info.Total, "changes", len(pending), "skipped", info.Skipped,
+		"duration", time.Since(startTime).String())
 	return pending, info, nil
 }
 
