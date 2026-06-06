@@ -389,6 +389,7 @@ func (s *GenericSyncer) ApplyChanges(ctx context.Context, dc k8sdynamic.Client, 
 }
 
 // ForwardSync syncs resources from GitLab to K8s.
+// Uses batch List + concurrent Apply for performance.
 func (s *GenericSyncer) ForwardSync(ctx context.Context, gc gitlab.Client, dc k8sdynamic.Client, source *store.GitLabSource, target *store.K8sTarget, resourceTypes []string, filter NameFilter) *SyncResultInfo {
 	info := &SyncResultInfo{}
 
@@ -398,91 +399,173 @@ func (s *GenericSyncer) ForwardSync(ctx context.Context, gc gitlab.Client, dc k8
 		return info
 	}
 
-	info.Total = 0
+	// Phase 1: Parse all resources.
+	type parsedRes struct {
+		res *generic.Resource
+		ns  string
+	}
+	var allResources []parsedRes
+
 	for _, f := range files {
 		resources, err := s.parser.ParseMulti(f.Content)
 		if err != nil {
 			info.Skipped++
 			continue
 		}
-
 		for _, res := range resources {
 			info.Total++
-
-			// Filter by resource types.
 			if !s.matchesResourceTypes(res.Kind, resourceTypes) {
 				info.Skipped++
-				info.SkippedNames = append(info.SkippedNames, fmt.Sprintf("%s/%s (%s filtered)", res.Namespace, res.Name, res.Kind))
 				continue
 			}
-
-			// Filter by name (include/exclude regex).
 			if !matchesNameFilter(res.Name, filter) {
 				info.Skipped++
 				continue
 			}
-
 			ns := res.Namespace
 			if ns == "" && res.Namespaced {
 				ns = target.Namespace
 			}
 			if !res.Namespaced {
-				ns = "" // cluster-scoped resources must use empty namespace
+				ns = ""
 			}
-
-			// Ensure the object's namespace matches the target namespace for Apply.
 			if res.Namespaced {
 				res.Object.SetNamespace(ns)
 			}
-
-			// Remove resourceVersion to avoid conflicts on update.
 			res.Object.SetResourceVersion("")
-			// Remove managedFields to keep the apply payload clean.
 			res.Object.SetManagedFields(nil)
+			allResources = append(allResources, parsedRes{res: res, ns: ns})
+		}
+	}
 
-			// Check if resource already exists with same content.
-			existing, getErr := dc.Get(ctx, ns, res.GVR, res.Name)
-			if getErr == nil {
-				if diff.IsSameContent(s.cleaner, existing, res.Object) {
-					info.Skipped++
-					info.SkippedNames = append(info.SkippedNames, fmt.Sprintf("%s/%s (%s)", ns, res.Name, res.Kind))
+	// Phase 2: Batch List to build index (same as PreviewForward).
+	type listKey struct{ gvr, ns string }
+	listTargets := make(map[listKey]bool)
+	for _, pr := range allResources {
+		listTargets[listKey{gvr: pr.res.GVR.String(), ns: pr.ns}] = true
+	}
+
+	type indexKey struct{ gvr, ns, name string }
+	existingIndex := make(map[indexKey]*unstructured.Unstructured)
+
+	type listResult struct {
+		key   listKey
+		items []*unstructured.Unstructured
+	}
+	listJobs := make(chan listKey, len(listTargets))
+	listResults := make(chan listResult, len(listTargets))
+	lw := 10
+	if len(listTargets) < lw {
+		lw = len(listTargets)
+	}
+	var listWg sync.WaitGroup
+	for w := 0; w < lw; w++ {
+		listWg.Add(1)
+		go func() {
+			defer listWg.Done()
+			for lt := range listJobs {
+				var gvr schema.GroupVersionResource
+				for _, pr := range allResources {
+					if pr.res.GVR.String() == lt.gvr {
+						gvr = pr.res.GVR
+						break
+					}
+				}
+				if gvr.Resource == "" {
 					continue
 				}
-			}
-
-			// Apply resource.
-			if err := dc.Apply(ctx, ns, res.GVR, res.Object); err != nil {
-				info.Failed++
-				info.FailedNames = append(info.FailedNames, fmt.Sprintf("%s/%s (%s)", ns, res.Name, res.Kind))
-				info.Errors = append(info.Errors, fmt.Sprintf("%s/%s/%s: %v", ns, res.Kind, res.Name, err))
-				info.Details = append(info.Details, history.ChangeDetail{
-					Name: res.Name, Namespace: ns, Action: "failed", Error: err.Error(),
-				})
-				continue
-			}
-
-			info.Synced++
-			info.SyncedNames = append(info.SyncedNames, fmt.Sprintf("%s/%s (%s)", ns, res.Name, res.Kind))
-
-			// Record diff.
-			action := "updated"
-			var oldYAML, newYAML string
-			if getErr != nil {
-				action = "created"
-			}
-			if existing != nil {
-				cleanOld := s.cleaner.Clean(existing)
-				if b, e := s.parser.Print(&generic.Resource{Object: cleanOld}); e == nil {
-					oldYAML = string(b)
+				items, err := dc.List(ctx, lt.ns, gvr, "")
+				if err != nil {
+					continue
 				}
+				listResults <- listResult{key: lt, items: items}
 			}
-			if b, e := s.parser.Print(res); e == nil {
-				newYAML = string(b)
+		}()
+	}
+	for lt := range listTargets {
+		listJobs <- lt
+	}
+	close(listJobs)
+	go func() { listWg.Wait(); close(listResults) }()
+	for lr := range listResults {
+		for _, obj := range lr.items {
+			existingIndex[indexKey{gvr: lr.key.gvr, ns: lr.key.ns, name: obj.GetName()}] = obj
+		}
+	}
+
+	// Phase 3: Filter unchanged, then concurrent Apply.
+	type applyJob struct {
+		res *generic.Resource
+		ns  string
+		old *unstructured.Unstructured
+	}
+	var toApply []applyJob
+	for _, pr := range allResources {
+		key := indexKey{gvr: pr.res.GVR.String(), ns: pr.ns, name: pr.res.Name}
+		existing := existingIndex[key]
+		if existing != nil && diff.IsSameContent(s.cleaner, existing, pr.res.Object) {
+			info.Skipped++
+			continue
+		}
+		toApply = append(toApply, applyJob{res: pr.res, ns: pr.ns, old: existing})
+	}
+
+	// Concurrent Apply (10 workers).
+	type applyResult struct {
+		synced bool
+		name   string
+		detail history.ChangeDetail
+		errMsg string
+	}
+	applyJobs := make(chan int, len(toApply))
+	applyResults := make(chan applyResult, len(toApply))
+	aw := 10
+	if len(toApply) < aw {
+		aw = len(toApply)
+	}
+	if aw > 0 {
+		var applyWg sync.WaitGroup
+		for w := 0; w < aw; w++ {
+			applyWg.Add(1)
+			go func() {
+				defer applyWg.Done()
+				for idx := range applyJobs {
+					j := toApply[idx]
+					if err := dc.Apply(ctx, j.ns, j.res.GVR, j.res.Object); err != nil {
+						applyResults <- applyResult{
+							name:   fmt.Sprintf("%s/%s (%s)", j.ns, j.res.Name, j.res.Kind),
+							errMsg: err.Error(),
+							detail: history.ChangeDetail{Name: j.res.Name, Namespace: j.ns, Kind: j.res.Kind, Action: "failed", Error: err.Error()},
+						}
+						continue
+					}
+					action := "updated"
+					if j.old == nil {
+						action = "created"
+					}
+					applyResults <- applyResult{
+						synced: true,
+						name:   fmt.Sprintf("%s/%s (%s)", j.ns, j.res.Name, j.res.Kind),
+						detail: history.ChangeDetail{Name: j.res.Name, Namespace: j.ns, Kind: j.res.Kind, Action: action},
+					}
+				}
+			}()
+		}
+		for i := range toApply {
+			applyJobs <- i
+		}
+		close(applyJobs)
+		go func() { applyWg.Wait(); close(applyResults) }()
+		for r := range applyResults {
+			if r.synced {
+				info.Synced++
+				info.SyncedNames = append(info.SyncedNames, r.name)
+			} else {
+				info.Failed++
+				info.FailedNames = append(info.FailedNames, r.name)
+				info.Errors = append(info.Errors, r.errMsg)
 			}
-			info.Details = append(info.Details, history.ChangeDetail{
-				Name: res.Name, Namespace: ns, Action: action,
-				OldYAML: oldYAML, NewYAML: newYAML,
-			})
+			info.Details = append(info.Details, r.detail)
 		}
 	}
 
@@ -516,80 +599,102 @@ func (s *GenericSyncer) ReverseSync(ctx context.Context, gc gitlab.Client, dc k8
 	}
 	var pending []pendingFile
 
+	// Concurrent List across all GVR+NS combinations.
+	type listJob struct {
+		gvrInfo gvrWithScope
+		kind    string
+		plural  string
+		ns      string
+	}
+	var allListJobs []listJob
 	for _, gvrInfo := range gvrs {
 		kind := gvrInfo.Kind
 		plural := gvr.KindToPlural(kind)
-
-		// For cluster-scoped resources, list once globally (namespace empty).
-		// For namespaced resources, list per namespace.
 		listNamespaces := namespaces
 		if !gvrInfo.Namespaced {
 			listNamespaces = []string{""}
 		}
-
 		for _, ns := range listNamespaces {
 			if gvrInfo.Namespaced && ns == "" {
 				continue
 			}
+			allListJobs = append(allListJobs, listJob{gvrInfo: gvrInfo, kind: kind, plural: plural, ns: ns})
+		}
+	}
 
-			resources, err := dc.List(ctx, ns, gvrInfo.GVR.GVR, "")
-			if err != nil {
-				s.logger.Warn("list failed", "gvr", gvrInfo.GVR, "ns", ns, "error", err)
+	type listResult struct {
+		job   listJob
+		items []*unstructured.Unstructured
+	}
+	listJobsCh := make(chan listJob, len(allListJobs))
+	listResultsCh := make(chan listResult, len(allListJobs))
+	rlw := 10
+	if len(allListJobs) < rlw {
+		rlw = len(allListJobs)
+	}
+	var rlWg sync.WaitGroup
+	for w := 0; w < rlw; w++ {
+		rlWg.Add(1)
+		go func() {
+			defer rlWg.Done()
+			for lj := range listJobsCh {
+				items, err := dc.List(ctx, lj.ns, lj.gvrInfo.GVR.GVR, "")
+				if err != nil {
+					s.logger.Warn("list failed", "gvr", lj.gvrInfo.GVR, "ns", lj.ns, "error", err)
+					continue
+				}
+				listResultsCh <- listResult{job: lj, items: items}
+			}
+		}()
+	}
+	for _, lj := range allListJobs {
+		listJobsCh <- lj
+	}
+	close(listJobsCh)
+	go func() { rlWg.Wait(); close(listResultsCh) }()
+
+	for lr := range listResultsCh {
+		for _, obj := range lr.items {
+			name := obj.GetName()
+			if shouldSkipResource(lr.job.kind, lr.job.ns, name, obj) {
+				continue
+			}
+			if !matchesNameFilter(name, filter) {
 				continue
 			}
 
-			for _, obj := range resources {
-				name := obj.GetName()
+			info.Total++
+			cleaned := s.cleaner.Clean(obj)
+			yamlBytes, err := s.parser.Print(&generic.Resource{Object: cleaned})
+			if err != nil {
+				info.Skipped++
+				continue
+			}
 
-				// Skip K8s-managed resources that should never be synced
-				// (auto-created bookkeeping, controller-owned children, etc.).
-				if shouldSkipResource(kind, ns, name, obj) {
-					continue
-				}
+			filePath := s.pathProvider.ResourcePath(
+				strings.TrimPrefix(source.Path, "/"),
+				lr.job.ns, lr.job.plural, name, lr.job.gvrInfo.Namespaced,
+			)
 
-				// User-defined name filter (include/exclude regex).
-				if !matchesNameFilter(name, filter) {
-					continue
-				}
-
-				info.Total++
-
-				// Clean runtime fields.
-				cleaned := s.cleaner.Clean(obj)
-				yamlBytes, err := s.parser.Print(&generic.Resource{Object: cleaned})
-				if err != nil {
+			var oldYAML string
+			action := "created"
+			if existing, ok := existingContent[filePath]; ok {
+				if strings.TrimSpace(existing) == strings.TrimSpace(string(yamlBytes)) {
 					info.Skipped++
 					continue
 				}
-
-				// Generate file path. For cluster-scoped resources the namespace
-				// segment is replaced by "_cluster" (handled inside ResourcePath).
-				filePath := s.pathProvider.ResourcePath(
-					strings.TrimPrefix(source.Path, "/"),
-					ns, plural, name, gvrInfo.Namespaced,
-				)
-
-				// Compare with existing.
-				var oldYAML string
-				action := "created"
-				if existing, ok := existingContent[filePath]; ok {
-					if strings.TrimSpace(existing) == strings.TrimSpace(string(yamlBytes)) {
-						info.Skipped++
-						continue
-					}
-					oldYAML = existing
-					action = "updated"
-				}
-
-				pending = append(pending, pendingFile{
-					path:    filePath,
-					content: yamlBytes,
-					detail: history.ChangeDetail{
-						Name: name, Namespace: ns, Kind: kind, Action: action,
-						OldYAML: oldYAML, NewYAML: string(yamlBytes),
-					},
-				})
+				oldYAML = existing
+				action = "updated"
 			}
+
+			pending = append(pending, pendingFile{
+				path:    filePath,
+				content: yamlBytes,
+				detail: history.ChangeDetail{
+					Name: name, Namespace: lr.job.ns, Kind: lr.job.kind, Action: action,
+					OldYAML: oldYAML, NewYAML: string(yamlBytes),
+				},
+			})
 		}
 	}
 
