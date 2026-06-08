@@ -134,6 +134,12 @@ func (s *GenericSyncer) PreviewForward(ctx context.Context, gc gitlab.Client, dc
 			if !res.Namespaced {
 				ns = ""
 			}
+			// Only sync resources whose namespace matches the task's target namespace.
+			// Support comma-separated multi-namespace (e.g. "ntsp,lion-app-eu").
+			if res.Namespaced && target.Namespace != "" && !namespaceMatches(ns, target.Namespace) {
+				info.Skipped++
+				continue
+			}
 			if res.Namespaced {
 				res.Object.SetNamespace(ns)
 			}
@@ -428,6 +434,11 @@ func (s *GenericSyncer) ForwardSync(ctx context.Context, gc gitlab.Client, dc k8
 			}
 			if !res.Namespaced {
 				ns = ""
+			}
+			// Only sync resources whose namespace matches the task's target namespace.
+			if res.Namespaced && target.Namespace != "" && !namespaceMatches(ns, target.Namespace) {
+				info.Skipped++
+				continue
 			}
 			if res.Namespaced {
 				res.Object.SetNamespace(ns)
@@ -780,6 +791,16 @@ func kindToAPIVersions(kind string) []string {
 	default:
 		return []string{"v1", "apps/v1", "batch/v1"}
 	}
+}
+
+// namespaceMatches checks if ns is in the comma-separated targetNS list.
+func namespaceMatches(ns, targetNS string) bool {
+	for _, allowed := range strings.Split(targetNS, ",") {
+		if strings.TrimSpace(allowed) == ns {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *GenericSyncer) matchesResourceTypes(kind string, resourceTypes []string) bool {
