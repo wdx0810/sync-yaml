@@ -2,27 +2,31 @@ import { useEffect, useState } from 'react';
 import { Tabs, Table, Button, Modal, Form, Input, InputNumber, Tag, Space, message, Popconfirm } from 'antd';
 import { PlusOutlined, DeleteOutlined, CheckCircleOutlined, EditOutlined } from '@ant-design/icons';
 import { api } from '../api/client';
-import type { GitLabSource, K8sTarget } from '../api/client';
+import type { GitLabSource, K8sTarget, NotifyChannel } from '../api/client';
 import ErrorAlert from '../components/ErrorAlert';
 
 export default function Connections() {
   const [sources, setSources] = useState<GitLabSource[]>([]);
   const [targets, setTargets] = useState<K8sTarget[]>([]);
+  const [notifyChannels, setNotifyChannels] = useState<NotifyChannel[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<any>(null);
   const [gitlabModalOpen, setGitlabModalOpen] = useState(false);
   const [k8sModalOpen, setK8sModalOpen] = useState(false);
+  const [notifyModalOpen, setNotifyModalOpen] = useState(false);
   const [editingGitlab, setEditingGitlab] = useState<string | null>(null);
   const [editingK8s, setEditingK8s] = useState<string | null>(null);
+  const [editingNotify, setEditingNotify] = useState<string | null>(null);
   const [testing, setTesting] = useState<string | null>(null);
   const [gitlabForm] = Form.useForm();
   const [k8sForm] = Form.useForm();
+  const [notifyForm] = Form.useForm();
 
   const fetchAll = async () => {
     setLoading(true); setError(null);
     try {
-      const [s, t] = await Promise.all([api.getSources(), api.getTargets()]);
-      setSources(s.data || []); setTargets(t.data || []);
+      const [s, t, n] = await Promise.all([api.getSources(), api.getTargets(), api.getNotifyChannels()]);
+      setSources(s.data || []); setTargets(t.data || []); setNotifyChannels(n.data || []);
     } catch (e) { setError(e); }
     finally { setLoading(false); }
   };
@@ -151,6 +155,34 @@ export default function Connections() {
             </>
           ),
         },
+        {
+          key: 'notify', label: `通知渠道 (${notifyChannels.length})`,
+          children: (
+            <>
+              <Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditingNotify(null); notifyForm.resetFields(); notifyForm.setFieldsValue({ type: 'feishu' }); setNotifyModalOpen(true); }} style={{ marginBottom: 16 }}>添加通知渠道</Button>
+              <Table
+                columns={[
+                  { title: '名称', dataIndex: 'name' },
+                  { title: '类型', dataIndex: 'type', render: (t: string) => <Tag color="blue">{t === 'feishu' ? '飞书' : t}</Tag> },
+                  { title: 'Webhook URL', dataIndex: 'webhookUrl', ellipsis: true },
+                  {
+                    title: '操作', render: (_: unknown, r: NotifyChannel) => (
+                      <Space>
+                        <Button size="small" icon={<EditOutlined />} onClick={() => { setEditingNotify(r.name); notifyForm.setFieldsValue(r); setNotifyModalOpen(true); }}>编辑</Button>
+                        <Popconfirm title="确认删除？" onConfirm={async () => { try { await api.deleteNotifyChannel(r.name); message.success('已删除'); fetchAll(); } catch (e: any) { message.error(e.message); } }}>
+                          <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
+                        </Popconfirm>
+                      </Space>
+                    ),
+                  },
+                ]}
+                dataSource={notifyChannels}
+                rowKey="name"
+                loading={loading}
+              />
+            </>
+          ),
+        },
       ]} />
 
       <Modal title={editingGitlab ? '编辑 GitLab' : '添加 GitLab'} open={gitlabModalOpen} onCancel={() => { setGitlabModalOpen(false); setEditingGitlab(null); }} onOk={() => gitlabForm.submit()} okText={editingGitlab ? '保存' : '添加'}>
@@ -178,6 +210,29 @@ export default function Connections() {
                 k8sForm.setFieldsValue({ kubeconfigContent: text });
               }
             }} />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal title={editingNotify ? '编辑通知渠道' : '添加通知渠道'} open={notifyModalOpen} onCancel={() => { setNotifyModalOpen(false); setEditingNotify(null); }} onOk={() => notifyForm.submit()} okText={editingNotify ? '保存' : '添加'}>
+        <Form form={notifyForm} layout="vertical" onFinish={async (values: any) => {
+          try {
+            if (editingNotify) {
+              await api.updateNotifyChannel(editingNotify, values);
+              message.success('已更新');
+            } else {
+              await api.createNotifyChannel(values);
+              message.success('已添加');
+            }
+            setNotifyModalOpen(false); setEditingNotify(null); notifyForm.resetFields(); fetchAll();
+          } catch (e: any) { message.error(e.message); }
+        }}>
+          <Form.Item name="name" label="名称" rules={[{ required: !editingNotify }]}><Input disabled={!!editingNotify} placeholder="例如: 研发群" /></Form.Item>
+          <Form.Item name="type" label="类型" initialValue="feishu">
+            <Input disabled value="feishu" />
+          </Form.Item>
+          <Form.Item name="webhookUrl" label="Webhook URL" rules={[{ required: true, message: '请输入飞书机器人 Webhook 地址' }]}>
+            <Input placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/xxxxxxxx" />
           </Form.Item>
         </Form>
       </Modal>
