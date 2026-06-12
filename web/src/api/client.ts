@@ -80,10 +80,17 @@ export interface SyncTask {
   resourceTypes?: string[];
   includeFilter?: string;
   excludeFilter?: string;
+  notifyChannel?: string;
   status: string;
   lastSyncTime: string;
   lastSyncResult: string;
   errorMessage?: string;
+}
+
+export interface NotifyChannel {
+  name: string;
+  type: string;
+  webhookUrl: string;
 }
 
 export interface DashboardSummary {
@@ -239,6 +246,12 @@ export const api = {
   updateTarget: (name: string, tgt: Partial<K8sTarget>) => apiClient.put(`/targets/${name}`, tgt),
   deleteTarget: (name: string) => apiClient.delete(`/targets/${name}`),
   testTarget: (name: string) => apiClient.post<TestResult>(`/targets/${name}/test`),
+
+  // Notify Channels
+  getNotifyChannels: () => apiClient.get<NotifyChannel[]>('/notify-channels'),
+  createNotifyChannel: (ch: NotifyChannel) => apiClient.post<NotifyChannel>('/notify-channels', ch),
+  updateNotifyChannel: (name: string, ch: Partial<NotifyChannel>) => apiClient.put(`/notify-channels/${name}`, ch),
+  deleteNotifyChannel: (name: string) => apiClient.delete(`/notify-channels/${name}`),
 
   // Tasks
   getTasks: () => apiClient.get<SyncTask[]>('/tasks'),

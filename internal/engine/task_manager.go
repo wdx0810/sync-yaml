@@ -13,6 +13,7 @@ import (
 	"github.com/configmap-sync/configmap-sync/internal/k8s"
 	k8sdynamic "github.com/configmap-sync/configmap-sync/internal/k8s/dynamic"
 	gvrpkg "github.com/configmap-sync/configmap-sync/internal/k8s/gvr"
+	"github.com/configmap-sync/configmap-sync/internal/notify"
 	"github.com/configmap-sync/configmap-sync/internal/store"
 
 	corev1 "k8s.io/api/core/v1"
@@ -66,14 +67,15 @@ type taskManager struct {
 	targetStore  store.TargetStore
 	taskStore    store.TaskStore
 	historyStore history.Store
+	notifyStore  store.NotifyStore
 	running      map[string]*runningTask
 	mu           sync.RWMutex
 	logger       *slog.Logger
 }
 
-func NewTaskManager(ss store.SourceStore, ts store.TargetStore, tks store.TaskStore, hs history.Store) TaskManager {
+func NewTaskManager(ss store.SourceStore, ts store.TargetStore, tks store.TaskStore, hs history.Store, ns store.NotifyStore) TaskManager {
 	return &taskManager{
-		sourceStore: ss, targetStore: ts, taskStore: tks, historyStore: hs,
+		sourceStore: ss, targetStore: ts, taskStore: tks, historyStore: hs, notifyStore: ns,
 		running: make(map[string]*runningTask),
 		logger:  slog.Default().With("component", "task-manager"),
 	}
@@ -465,6 +467,11 @@ func (m *taskManager) finishTask(task *store.SyncTask, direction, namespace stri
 		})
 	}
 	m.logger.Info("sync done", "task", task.Name, "direction", direction, "synced", info.Synced, "total", info.Total, "failed", info.Failed)
+
+	// Send notification for reverse sync if channel is configured and there are changes.
+	if direction == "reverse" && info.Synced > 0 && task.NotifyChannel != "" && m.notifyStore != nil {
+		go m.sendNotification(task, direction, info)
+	}
 }
 
 func (m *taskManager) setTaskError(task *store.SyncTask, errMsg string) {
@@ -473,5 +480,30 @@ func (m *taskManager) setTaskError(task *store.SyncTask, errMsg string) {
 	task.LastSyncTime = time.Now().Format(time.RFC3339)
 	task.LastSyncResult = "失败: " + errMsg
 	_ = m.taskStore.Update(task.ID, task)
+}
+
+func (m *taskManager) sendNotification(task *store.SyncTask, direction string, info *SyncResultInfo) {
+	ch, err := m.notifyStore.Get(task.NotifyChannel)
+	if err != nil {
+		m.logger.Warn("notify channel not found", "channel", task.NotifyChannel, "error", err)
+		return
+	}
+	n := &notify.SyncNotification{
+		TaskName:    task.Name,
+		Direction:   direction,
+		Total:       info.Total,
+		Synced:      info.Synced,
+		Failed:      info.Failed,
+		Skipped:     info.Skipped,
+		SyncedNames: info.SyncedNames,
+		FailedNames: info.FailedNames,
+		Errors:      info.Errors,
+		Timestamp:   time.Now(),
+	}
+	if err := notify.SendFeishu(ch.WebhookURL, n); err != nil {
+		m.logger.Error("feishu notify failed", "task", task.Name, "error", err)
+	} else {
+		m.logger.Info("feishu notify sent", "task", task.Name, "channel", ch.Name)
+	}
 }
 

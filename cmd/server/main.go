@@ -72,8 +72,11 @@ func main() {
 	// Initialize connection tester.
 	connTester := store.NewConnectionTester()
 
+	// Initialize notify store.
+	notifyStore := store.NewNotifyStore(storagePath)
+
 	// Initialize task manager.
-	taskMgr := engine.NewTaskManager(sourceStore, targetStore, taskStoreRef, historyStore)
+	taskMgr := engine.NewTaskManager(sourceStore, targetStore, taskStoreRef, historyStore, notifyStore)
 
 	// Initialize API server.
 	apiServer := api.NewServer(api.ServerConfig{
@@ -84,6 +87,7 @@ func main() {
 		TaskManager: taskMgr,
 		ConnTester:  connTester,
 		UserStore:   userStore,
+		NotifyStore: notifyStore,
 		StoragePath: storagePath,
 	})
 	router := apiServer.Router()

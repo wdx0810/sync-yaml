@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Table, Button, Modal, Form, Input, InputNumber, Select, Tag, Space, message, Popconfirm } from 'antd';
 import { PlusOutlined, DeleteOutlined, PlayCircleOutlined, PauseCircleOutlined, SyncOutlined, LoadingOutlined, EditOutlined } from '@ant-design/icons';
 import { api } from '../api/client';
-import type { SyncTask, GitLabSource, K8sTarget, PendingChange, SyncSummary } from '../api/client';
+import type { SyncTask, GitLabSource, K8sTarget, PendingChange, SyncSummary, NotifyChannel } from '../api/client';
 import ErrorAlert from '../components/ErrorAlert';
 import ResourceTypeSelector from '../components/ResourceTypeSelector';
 import SyncPreviewModal from '../components/SyncPreviewModal';
@@ -11,6 +11,7 @@ export default function Tasks() {
   const [tasks, setTasks] = useState<SyncTask[]>([]);
   const [sources, setSources] = useState<GitLabSource[]>([]);
   const [targets, setTargets] = useState<K8sTarget[]>([]);
+  const [notifyChannels, setNotifyChannels] = useState<NotifyChannel[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<any>(null);
   const [modalOpen, setModalOpen] = useState(false);
@@ -33,11 +34,11 @@ export default function Tasks() {
   const fetchAll = async () => {
     setLoading(true); setError(null);
     try {
-      const [t, s, tg] = await Promise.allSettled([api.getTasks(), api.getSources(), api.getTargets()]);
+      const [t, s, tg, nc] = await Promise.allSettled([api.getTasks(), api.getSources(), api.getTargets(), api.getNotifyChannels()]);
       if (t.status === 'fulfilled') setTasks(t.value.data || []);
       if (s.status === 'fulfilled') setSources(s.value.data || []);
       if (tg.status === 'fulfilled') setTargets(tg.value.data || []);
-      // Show error only if tasks failed (primary data).
+      if (nc.status === 'fulfilled') setNotifyChannels(nc.value.data || []);
       if (t.status === 'rejected') setError(t.reason);
     } catch (e) { setError(e); }
     finally { setLoading(false); }
@@ -278,6 +279,13 @@ export default function Tasks() {
           </Form.Item>
           <Form.Item name="excludeFilter" label="排除过滤（正则）" tooltip="跳过名称匹配的资源。例如：system:.*|everest-.*|cce-.*">
             <Input placeholder="例如: system:.*|everest-.*|kube-.* （留空=不排除）" />
+          </Form.Item>
+          <Form.Item name="notifyChannel" label="飞书通知" tooltip="反向同步完成有变更时发送通知到飞书群">
+            <Select
+              allowClear
+              placeholder="不通知"
+              options={notifyChannels.map(ch => ({ label: `${ch.name} (${ch.type})`, value: ch.name }))}
+            />
           </Form.Item>
         </Form>
       </Modal>

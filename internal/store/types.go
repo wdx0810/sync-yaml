@@ -39,6 +39,7 @@ type SyncTask struct {
 	ResourceTypes  []string `json:"resourceTypes,omitempty"`
 	IncludeFilter  string   `json:"includeFilter,omitempty"`
 	ExcludeFilter  string   `json:"excludeFilter,omitempty"`
+	NotifyChannel  string   `json:"notifyChannel,omitempty"`
 	Status         string   `json:"status"`
 	LastSyncTime   string   `json:"lastSyncTime"`
 	LastSyncResult string   `json:"lastSyncResult"`
@@ -74,4 +75,11 @@ type ErrReferenced struct {
 
 func (e *ErrReferenced) Error() string {
 	return fmt.Sprintf("cannot delete %s %q: referenced by tasks %v", e.Entity, e.Name, e.TaskNames)
+}
+
+// NotifyChannel represents a notification channel (e.g. Feishu webhook).
+type NotifyChannel struct {
+	Name       string `json:"name"`
+	Type       string `json:"type"`       // "feishu"
+	WebhookURL string `json:"webhookUrl"`
 }

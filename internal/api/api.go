@@ -29,6 +29,7 @@ type Server struct {
 	taskManager engine.TaskManager
 	connTester  store.ConnectionTester
 	userStore   store.UserStore
+	notifyStore store.NotifyStore
 	router      *mux.Router
 	logger      *slog.Logger
 	storagePath string
@@ -45,6 +46,7 @@ type ServerConfig struct {
 	TaskManager engine.TaskManager
 	ConnTester  store.ConnectionTester
 	UserStore   store.UserStore
+	NotifyStore store.NotifyStore
 	StoragePath string
 }
 
@@ -60,6 +62,7 @@ func NewServer(cfg ServerConfig) *Server {
 		taskManager: cfg.TaskManager,
 		connTester:  cfg.ConnTester,
 		userStore:   cfg.UserStore,
+		notifyStore: cfg.NotifyStore,
 		router:      mux.NewRouter(),
 		logger:      slog.Default().With("component", "api"),
 		storagePath: cfg.StoragePath,
@@ -159,6 +162,12 @@ func (s *Server) registerRoutes() {
 	api.HandleFunc("/targets/{name}", s.updateTarget).Methods("PUT")
 	api.HandleFunc("/targets/{name}", s.deleteTarget).Methods("DELETE")
 	api.HandleFunc("/targets/{name}/test", s.testTarget).Methods("POST")
+
+	// Notify channels endpoints.
+	api.HandleFunc("/notify-channels", s.listNotifyChannels).Methods("GET")
+	api.HandleFunc("/notify-channels", s.createNotifyChannel).Methods("POST")
+	api.HandleFunc("/notify-channels/{name}", s.updateNotifyChannel).Methods("PUT")
+	api.HandleFunc("/notify-channels/{name}", s.deleteNotifyChannel).Methods("DELETE")
 
 	// MFA management endpoints (protected).
 	api.HandleFunc("/auth/mfa/status", s.handleMFAStatus).Methods("GET")
