@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/gorilla/mux"
+
 	"github.com/configmap-sync/configmap-sync/internal/store"
 )
 
@@ -253,4 +255,29 @@ func (s *Server) handleCurrentUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, user)
+}
+
+// handleGenerateUserAPIToken generates an API token for a user.
+func (s *Server) handleGenerateUserAPIToken(w http.ResponseWriter, r *http.Request) {
+	username := mux.Vars(r)["username"]
+	token, err := s.userStore.GenerateAPIToken(username)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{
+		"token":    token,
+		"username": username,
+		"usage":    "Authorization: Bearer " + token,
+	})
+}
+
+// handleDeleteUserAPIToken deletes the API token for a user.
+func (s *Server) handleDeleteUserAPIToken(w http.ResponseWriter, r *http.Request) {
+	username := mux.Vars(r)["username"]
+	if err := s.userStore.DeleteAPIToken(username); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "API Token 已删除"})
 }

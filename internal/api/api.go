@@ -138,6 +138,8 @@ func (s *Server) registerRoutes() {
 	api.HandleFunc("/users/{username}/project-permissions/{project}", s.requireAdmin(s.handleRemoveProjectPermissionWrapper)).Methods("DELETE")
 	api.HandleFunc("/users/{username}/mfa-reset", s.requireAdmin(s.handleResetUserMFAWrapper)).Methods("POST")
 	api.HandleFunc("/users/{username}/mfa-enabled", s.requireAdmin(s.handleSetUserMFAEnabledWrapper)).Methods("PUT")
+	api.HandleFunc("/users/{username}/api-token", s.requireAdmin(s.handleGenerateUserAPIToken)).Methods("POST")
+	api.HandleFunc("/users/{username}/api-token", s.requireAdmin(s.handleDeleteUserAPIToken)).Methods("DELETE")
 
 	// Existing endpoints.
 	api.HandleFunc("/configmaps", s.listConfigMaps).Methods("GET")

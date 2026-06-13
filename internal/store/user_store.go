@@ -1,6 +1,8 @@
 package store
 
 import (
+	cryptoRand "crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"log/slog"
 	"os"
@@ -33,6 +35,7 @@ type User struct {
 	Role     Role        `json:"role"`
 	Enabled  bool        `json:"enabled"`
 	MFA      MFASettings `json:"mfa"`
+	APIToken string      `json:"apiToken,omitempty"`
 }
 
 // TaskPermission represents a user's permission on a specific task.
@@ -70,6 +73,11 @@ type UserStore interface {
 
 	// MFA (per-user)
 	SetUserMFA(username string, mfa MFASettings) error
+
+	// API Token
+	GenerateAPIToken(username string) (string, error)
+	DeleteAPIToken(username string) error
+	GetUserByAPIToken(token string) (*User, error)
 
 	// Permission management
 	GetUserPermissions(username string) (*UserPermissions, error)
@@ -187,6 +195,10 @@ func (s *userStore) ListUsers() ([]User, error) {
 		result[i].Password = ""
 		result[i].MFA.Configured = result[i].MFA.Secret != ""
 		result[i].MFA.Secret = ""
+		// Mask API token: show whether it exists but not the value.
+		if result[i].APIToken != "" {
+			result[i].APIToken = "••••••••"
+		}
 	}
 	return result, nil
 }
@@ -200,6 +212,9 @@ func (s *userStore) GetUser(username string) (*User, error) {
 			out.Password = ""
 			out.MFA.Configured = out.MFA.Secret != ""
 			out.MFA.Secret = ""
+			if out.APIToken != "" {
+				out.APIToken = "••••••••"
+			}
 			return &out, nil
 		}
 	}
@@ -231,6 +246,61 @@ func (s *userStore) SetUserMFA(username string, mfa MFASettings) error {
 		}
 	}
 	return &ErrNotFound{Entity: "user", Name: username}
+}
+
+// GenerateAPIToken generates a new API token for a user.
+func (s *userStore) GenerateAPIToken(username string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.users {
+		if s.users[i].Username == username {
+			tokenBytes := make([]byte, 32)
+			if _, err := cryptoRand.Read(tokenBytes); err != nil {
+				return "", err
+			}
+			token := hex.EncodeToString(tokenBytes)
+			s.users[i].APIToken = token
+			if err := s.saveUsers(); err != nil {
+				return "", err
+			}
+			return token, nil
+		}
+	}
+	return "", &ErrNotFound{Entity: "user", Name: username}
+}
+
+// DeleteAPIToken removes the API token for a user.
+func (s *userStore) DeleteAPIToken(username string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.users {
+		if s.users[i].Username == username {
+			s.users[i].APIToken = ""
+			return s.saveUsers()
+		}
+	}
+	return &ErrNotFound{Entity: "user", Name: username}
+}
+
+// GetUserByAPIToken finds a user by their API token.
+func (s *userStore) GetUserByAPIToken(token string) (*User, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if token == "" {
+		return nil, &ErrNotFound{Entity: "user", Name: "empty token"}
+	}
+	for _, u := range s.users {
+		if u.APIToken != "" && u.APIToken == token {
+			if !u.Enabled {
+				return nil, &ErrNotFound{Entity: "user (disabled)", Name: u.Username}
+			}
+			out := u
+			out.Password = ""
+			out.MFA.Secret = ""
+			return &out, nil
+		}
+	}
+	return nil, &ErrNotFound{Entity: "user", Name: "invalid token"}
 }
 
 func (s *userStore) CreateUser(user *User) error {

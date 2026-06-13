@@ -9,13 +9,14 @@ import (
 )
 
 // handleWebhookSync handles POST /api/v1/hooks/sync/{id}?token=xxx
-// This is a public endpoint that uses token-based auth instead of user login.
+// Supports two auth methods:
+// 1. Task-level token (legacy): matches task.WebhookToken
+// 2. User API token: matches user.APIToken, then checks user permission on task
 func (s *Server) handleWebhookSync(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
 	token := r.URL.Query().Get("token")
 
 	if token == "" {
-		// Also check Authorization header: Bearer <token>
 		token = extractToken(r)
 	}
 
@@ -24,19 +25,30 @@ func (s *Server) handleWebhookSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get task and verify token.
+	// Get task.
 	task, err := s.taskStore.Get(id)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "任务不存在")
 		return
 	}
 
-	if task.WebhookToken == "" {
-		writeError(w, http.StatusForbidden, "该任务未启用 Webhook，请先生成 Token")
-		return
-	}
-
-	if task.WebhookToken != token {
+	// Try task-level token first.
+	if task.WebhookToken != "" && task.WebhookToken == token {
+		// Task token matched — proceed.
+	} else if s.userStore != nil {
+		// Try user API token.
+		user, err := s.userStore.GetUserByAPIToken(token)
+		if err != nil {
+			writeError(w, http.StatusUnauthorized, "Token 无效")
+			return
+		}
+		// Check user permission on this task.
+		allowed, _ := s.userStore.CanAccessTask(user.Username, id, task.Project, "sync")
+		if !allowed {
+			writeError(w, http.StatusForbidden, "该用户没有此任务的同步权限")
+			return
+		}
+	} else {
 		writeError(w, http.StatusUnauthorized, "Token 无效")
 		return
 	}
