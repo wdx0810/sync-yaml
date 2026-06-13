@@ -99,10 +99,13 @@ func (s *Server) registerRoutes() {
 	api.HandleFunc("/auth/change-password", s.handleChangePassword).Methods("POST")
 	api.HandleFunc("/auth/mfa/verify", s.handleMFAVerify).Methods("POST")
 
+	// External webhook trigger (token-based auth, no login required).
+	api.HandleFunc("/hooks/sync/{id}", s.handleWebhookSync).Methods("POST")
+
 	// Auth middleware for all other routes.
 	api.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if strings.HasSuffix(r.URL.Path, "/auth/login") || strings.HasSuffix(r.URL.Path, "/auth/check") || strings.HasSuffix(r.URL.Path, "/auth/mfa/verify") {
+			if strings.HasSuffix(r.URL.Path, "/auth/login") || strings.HasSuffix(r.URL.Path, "/auth/check") || strings.HasSuffix(r.URL.Path, "/auth/mfa/verify") || strings.Contains(r.URL.Path, "/hooks/") {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -185,6 +188,8 @@ func (s *Server) registerRoutes() {
 	api.HandleFunc("/tasks/{id}/sync", s.triggerSync).Methods("POST")
 	api.HandleFunc("/tasks/{id}/preview", s.previewSync).Methods("POST")
 	api.HandleFunc("/tasks/{id}/apply", s.applyChanges).Methods("POST")
+	api.HandleFunc("/tasks/{id}/webhook-token", s.handleGenerateWebhookToken).Methods("POST")
+	api.HandleFunc("/tasks/{id}/webhook-token", s.handleDeleteWebhookToken).Methods("DELETE")
 
 	// Dashboard endpoint.
 	api.HandleFunc("/dashboard", s.getDashboardData).Methods("GET")

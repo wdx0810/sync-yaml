@@ -40,6 +40,7 @@ type SyncTask struct {
 	IncludeFilter  string   `json:"includeFilter,omitempty"`
 	ExcludeFilter  string   `json:"excludeFilter,omitempty"`
 	NotifyChannel  string   `json:"notifyChannel,omitempty"`
+	WebhookToken   string   `json:"webhookToken,omitempty"`
 	Status         string   `json:"status"`
 	LastSyncTime   string   `json:"lastSyncTime"`
 	LastSyncResult string   `json:"lastSyncResult"`
