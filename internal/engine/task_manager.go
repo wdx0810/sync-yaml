@@ -342,7 +342,8 @@ func (m *taskManager) runScheduled(ctx context.Context, task *store.SyncTask, gc
 	}
 }
 
-// runWatchMode uses K8s Watch API to detect ConfigMap changes and sync to GitLab immediately.
+// runWatchMode uses K8s Watch API to detect ConfigMap changes and sync to GitLab.
+// Uses a 5-second debounce to batch rapid changes into a single sync/commit.
 func (m *taskManager) runWatchMode(ctx context.Context, task *store.SyncTask, gc gitlab.Client, kc k8s.Client, source *store.GitLabSource, target *store.K8sTarget, rt *runningTask) {
 	// Use task-level namespace if specified, otherwise fall back to target namespace.
 	ns := target.Namespace
@@ -353,6 +354,9 @@ func (m *taskManager) runWatchMode(ctx context.Context, task *store.SyncTask, gc
 	for i := range namespaces { namespaces[i] = strings.TrimSpace(namespaces[i]) }
 
 	m.logger.Info("starting watch mode", "task", task.Name, "namespaces", namespaces)
+
+	// Debounce channel: any event triggers a sync after 5s of silence.
+	trigger := make(chan struct{}, 1)
 
 	for _, ns := range namespaces {
 		if ns == "" { continue }
@@ -366,20 +370,53 @@ func (m *taskManager) runWatchMode(ctx context.Context, task *store.SyncTask, gc
 				select {
 				case <-ctx.Done():
 					return
-				case cm, ok := <-events:
+				case _, ok := <-events:
 					if !ok { return }
-					m.logger.Info("watch: configmap changed", "namespace", namespace, "name", cm.Name)
-					// Trigger a full reverse sync for this task.
-					info := m.doSync(ctx, task, gc, kc, source, target)
-					rt.status.LastSyncTime = time.Now()
-					if info.Failed > 0 { rt.status.LastResult = "failed" } else { rt.status.LastResult = "success" }
+					// Signal the debounce loop (non-blocking).
+					select {
+					case trigger <- struct{}{}:
+					default:
+					}
 				}
 			}
 		}(ns, ch)
 	}
 
-	// Block until context is cancelled.
-	<-ctx.Done()
+	// Debounce loop: wait 5 seconds after the last event before syncing.
+	const debounceDelay = 5 * time.Second
+	var timer *time.Timer
+
+	for {
+		select {
+		case <-ctx.Done():
+			if timer != nil {
+				timer.Stop()
+			}
+			return
+		case <-trigger:
+			// Reset the timer on each new event.
+			if timer != nil {
+				timer.Stop()
+			}
+			timer = time.NewTimer(debounceDelay)
+		case <-func() <-chan time.Time {
+			if timer != nil {
+				return timer.C
+			}
+			return make(chan time.Time) // block forever if no timer
+		}():
+			// 5 seconds of silence — do one sync.
+			m.logger.Info("watch: debounced sync triggered", "task", task.Name)
+			info := m.doSync(ctx, task, gc, kc, source, target)
+			rt.status.LastSyncTime = time.Now()
+			if info.Failed > 0 {
+				rt.status.LastResult = "failed"
+			} else {
+				rt.status.LastResult = "success"
+			}
+			timer = nil
+		}
+	}
 }
 
 // doSync always uses the generic syncer (dynamic client + Server-Side Apply) for all resource types.
