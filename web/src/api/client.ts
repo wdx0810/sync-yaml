@@ -81,6 +81,7 @@ export interface SyncTask {
   includeFilter?: string;
   excludeFilter?: string;
   notifyChannel?: string;
+  webhookToken?: string;
   status: string;
   lastSyncTime: string;
   lastSyncResult: string;
@@ -263,6 +264,8 @@ export const api = {
   syncTask: (id: string) => apiClient.post(`/tasks/${id}/sync`),
   previewSync: (id: string) => apiClient.post<PreviewResult>(`/tasks/${id}/preview`),
   applyChanges: (id: string, changes: PendingChange[]) => apiClient.post<SyncSummary>(`/tasks/${id}/apply`, { changes }),
+  generateWebhookToken: (id: string) => apiClient.post<{ token: string; endpoint: string }>(`/tasks/${id}/webhook-token`),
+  deleteWebhookToken: (id: string) => apiClient.delete(`/tasks/${id}/webhook-token`),
 
   // Users
   getCurrentUser: () => apiClient.get<User>('/users/me'),

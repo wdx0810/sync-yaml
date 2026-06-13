@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react';
 import { Table, Button, Modal, Form, Input, InputNumber, Select, Tag, Space, message, Popconfirm } from 'antd';
-import { PlusOutlined, DeleteOutlined, PlayCircleOutlined, PauseCircleOutlined, SyncOutlined, LoadingOutlined, EditOutlined } from '@ant-design/icons';
+import { PlusOutlined, DeleteOutlined, PlayCircleOutlined, PauseCircleOutlined, SyncOutlined, LoadingOutlined, EditOutlined, ApiOutlined } from '@ant-design/icons';
 import { api } from '../api/client';
 import type { SyncTask, GitLabSource, K8sTarget, PendingChange, SyncSummary, NotifyChannel } from '../api/client';
 import ErrorAlert from '../components/ErrorAlert';
 import ResourceTypeSelector from '../components/ResourceTypeSelector';
 import SyncPreviewModal from '../components/SyncPreviewModal';
+
+const { confirm } = Modal;
 
 export default function Tasks() {
   const [tasks, setTasks] = useState<SyncTask[]>([]);
@@ -146,6 +148,58 @@ export default function Tasks() {
     }
   };
 
+  const handleWebhookToken = async (task: SyncTask) => {
+    if (task.webhookToken) {
+      // Show existing token and endpoint.
+      const baseUrl = window.location.origin;
+      const endpoint = `${baseUrl}/api/v1/hooks/sync/${task.id}?token=${task.webhookToken}`;
+      confirm({
+        title: 'Webhook 接口',
+        width: 600,
+        content: (
+          <div>
+            <p style={{ marginBottom: 8 }}><b>调用地址：</b></p>
+            <Input.TextArea value={`POST ${endpoint}`} rows={2} readOnly style={{ fontFamily: 'monospace', fontSize: 12 }} />
+            <p style={{ marginTop: 12, marginBottom: 8 }}><b>curl 示例：</b></p>
+            <Input.TextArea value={`curl -X POST "${endpoint}"`} rows={2} readOnly style={{ fontFamily: 'monospace', fontSize: 12 }} />
+            <p style={{ marginTop: 12, color: '#f59e0b' }}>点击"重新生成"将废弃旧 Token</p>
+          </div>
+        ),
+        okText: '重新生成',
+        cancelText: '关闭',
+        onOk: async () => {
+          const res = await api.generateWebhookToken(task.id);
+          message.success('Token 已重新生成');
+          Modal.info({ title: '新 Token', content: <Input.TextArea value={res.data.token} rows={2} readOnly style={{ fontFamily: 'monospace' }} /> });
+          fetchAll();
+        },
+      });
+    } else {
+      // Generate new token.
+      try {
+        const res = await api.generateWebhookToken(task.id);
+        const baseUrl = window.location.origin;
+        const endpoint = `${baseUrl}${res.data.endpoint}`;
+        Modal.success({
+          title: 'Webhook Token 已生成',
+          width: 600,
+          content: (
+            <div>
+              <p><b>调用地址：</b></p>
+              <Input.TextArea value={`POST ${endpoint}`} rows={2} readOnly style={{ fontFamily: 'monospace', fontSize: 12 }} />
+              <p style={{ marginTop: 12 }}><b>curl 示例：</b></p>
+              <Input.TextArea value={`curl -X POST "${endpoint}"`} rows={2} readOnly style={{ fontFamily: 'monospace', fontSize: 12 }} />
+              <p style={{ marginTop: 12, color: '#64748b', fontSize: 12 }}>请妥善保管 Token，关闭后不再显示完整值</p>
+            </div>
+          ),
+        });
+        fetchAll();
+      } catch (e: any) {
+        message.error(e.message || '生成失败');
+      }
+    }
+  };
+
   // Filter tasks by project and name.
   const filteredTasks = tasks.filter(t => {
     if (projectFilter && t.project !== projectFilter) return false;
@@ -174,7 +228,7 @@ export default function Tasks() {
     { title: '最近同步', dataIndex: 'lastSyncTime', width: 160, render: (t: string) => t ? new Date(t).toLocaleString() : '-' },
     { title: '结果', dataIndex: 'lastSyncResult', ellipsis: true, render: (r: string) => r || '-' },
     {
-      title: '操作', width: 260, render: (_: unknown, record: SyncTask) => (
+      title: '操作', width: 340, render: (_: unknown, record: SyncTask) => (
         <Space>
           {record.status !== 'running' ? (
             <Button size="small" icon={<PlayCircleOutlined />} onClick={() => handleStart(record.id)}>启动</Button>
@@ -191,6 +245,9 @@ export default function Tasks() {
             {record.direction === 'reverse' ? '同步' : '同步（需审核）'}
           </Button>
           <Button size="small" icon={<EditOutlined />} onClick={() => openEditTask(record)}>编辑</Button>
+          <Button size="small" icon={<ApiOutlined />} onClick={() => handleWebhookToken(record)}>
+            {record.webhookToken ? 'Webhook' : '生成Token'}
+          </Button>
           <Popconfirm title="确认删除？" onConfirm={() => handleDelete(record.id)}>
             <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
           </Popconfirm>
