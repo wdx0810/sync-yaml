@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	gogitlab "github.com/xanzy/go-gitlab"
 )
@@ -41,6 +42,15 @@ type FileCommitAction struct {
 	Content []byte
 }
 
+// FileDiff represents a file change between two commits.
+type FileDiff struct {
+	Path       string `json:"path"`
+	OldPath    string `json:"oldPath,omitempty"`
+	NewFile    bool   `json:"newFile"`
+	DeletedFile bool  `json:"deletedFile"`
+	Diff       string `json:"diff"`
+}
+
 // Client defines the interface for GitLab interactions.
 type Client interface {
 	// FetchFiles fetches all YAML files under the given path.
@@ -51,6 +61,8 @@ type Client interface {
 	CommitFile(ctx context.Context, path string, content []byte, message string) error
 	// CommitFiles commits multiple files in a single atomic commit.
 	CommitFiles(ctx context.Context, files []FileCommitAction, message string) error
+	// CompareByTime returns diffs between two time points on the branch.
+	CompareByTime(ctx context.Context, since, until string, path string) ([]FileDiff, error)
 }
 
 // ConnectionStatus represents the GitLab connection state.
@@ -305,6 +317,85 @@ func (c *clientImpl) CommitFiles(ctx context.Context, files []FileCommitAction, 
 
 	c.status = StatusConnected
 	return nil
+}
+
+// CompareByTime returns diffs between two time points on the branch.
+// Uses GitLab Commits API to find commits at those times, then Compare.
+func (c *clientImpl) CompareByTime(ctx context.Context, since, until string, path string) ([]FileDiff, error) {
+	// List commits in the time range to get the boundary SHAs.
+	sinceTime, err := time.Parse(time.RFC3339, since)
+	if err != nil {
+		return nil, fmt.Errorf("invalid since time: %w", err)
+	}
+	untilTime, err := time.Parse(time.RFC3339, until)
+	if err != nil {
+		return nil, fmt.Errorf("invalid until time: %w", err)
+	}
+
+	// Get the earliest commit at or before 'since' as the base.
+	opts := &gogitlab.ListCommitsOptions{
+		RefName: gogitlab.Ptr(c.branch),
+		Until:   gogitlab.Ptr(sinceTime),
+		ListOptions: gogitlab.ListOptions{PerPage: 1},
+	}
+	if path != "" {
+		opts.Path = gogitlab.Ptr(path)
+	}
+
+	baseSHA := c.branch + "~1" // fallback: compare from parent
+	baseCommits, _, err := c.gl.Commits.ListCommits(c.projectID, opts, gogitlab.WithContext(ctx))
+	if err == nil && len(baseCommits) > 0 {
+		baseSHA = baseCommits[0].ID
+	}
+
+	// Get the latest commit at or before 'until' as the head.
+	opts2 := &gogitlab.ListCommitsOptions{
+		RefName: gogitlab.Ptr(c.branch),
+		Until:   gogitlab.Ptr(untilTime),
+		ListOptions: gogitlab.ListOptions{PerPage: 1},
+	}
+	if path != "" {
+		opts2.Path = gogitlab.Ptr(path)
+	}
+
+	headSHA := c.branch
+	headCommits, _, err := c.gl.Commits.ListCommits(c.projectID, opts2, gogitlab.WithContext(ctx))
+	if err == nil && len(headCommits) > 0 {
+		headSHA = headCommits[0].ID
+	}
+
+	if baseSHA == headSHA {
+		return nil, nil // no changes in this period
+	}
+
+	// Compare.
+	compare, _, err := c.gl.Repositories.Compare(c.projectID, &gogitlab.CompareOptions{
+		From: gogitlab.Ptr(baseSHA),
+		To:   gogitlab.Ptr(headSHA),
+	}, gogitlab.WithContext(ctx))
+	if err != nil {
+		return nil, c.handleError("CompareByTime", err)
+	}
+
+	var diffs []FileDiff
+	for _, d := range compare.Diffs {
+		p := d.NewPath
+		if p == "" {
+			p = d.OldPath
+		}
+		// Filter by path prefix if specified.
+		if path != "" && !strings.HasPrefix(p, path) {
+			continue
+		}
+		diffs = append(diffs, FileDiff{
+			Path:        p,
+			OldPath:     d.OldPath,
+			NewFile:     d.NewFile,
+			DeletedFile: d.DeletedFile,
+			Diff:        d.Diff,
+		})
+	}
+	return diffs, nil
 }
 
 // handleError classifies and logs GitLab API errors.

@@ -1,11 +1,91 @@
 import { useEffect, useState } from 'react';
-import { Table, Input, Select, DatePicker, Space, Tag, Collapse } from 'antd';
+import { Table, Input, Select, DatePicker, Space, Tag, Collapse, Card, Button, message } from 'antd';
+import { SearchOutlined } from '@ant-design/icons';
 import ReactDiffViewer from 'react-diff-viewer-continued';
 import { api } from '../api/client';
-import type { SyncRecord, HistoryFilter } from '../api/client';
+import type { SyncRecord, HistoryFilter, SyncTask } from '../api/client';
 import ErrorAlert from '../components/ErrorAlert';
 
 const { RangePicker } = DatePicker;
+
+function CompareSection() {
+  const [tasks, setTasks] = useState<SyncTask[]>([]);
+  const [taskId, setTaskId] = useState<string>('');
+  const [dateRange, setDateRange] = useState<[string, string] | null>(null);
+  const [diffs, setDiffs] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [total, setTotal] = useState(0);
+
+  useEffect(() => {
+    api.getTasks().then(res => setTasks(res.data || [])).catch(() => {});
+  }, []);
+
+  const handleCompare = async () => {
+    if (!taskId || !dateRange) {
+      message.warning('请选择任务和时间范围');
+      return;
+    }
+    setLoading(true);
+    try {
+      const res = await api.compareChanges(taskId, dateRange[0], dateRange[1]);
+      setDiffs((res.data as any).diffs || []);
+      setTotal((res.data as any).total || 0);
+      if ((res.data as any).total === 0) message.info('该时间段内无变更');
+    } catch (e: any) {
+      message.error(e.message || '对比失败');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div>
+      <Space wrap style={{ marginBottom: diffs.length > 0 ? 12 : 0 }}>
+        <Select
+          placeholder="选择同步任务"
+          value={taskId || undefined}
+          onChange={setTaskId}
+          style={{ width: 220 }}
+          options={tasks.map(t => ({ label: `${t.name} (${t.direction === 'reverse' ? 'K8s→Git' : 'Git→K8s'})`, value: t.id }))}
+        />
+        <RangePicker
+          showTime
+          onChange={(dates) => {
+            if (dates && dates[0] && dates[1]) {
+              setDateRange([dates[0].toISOString(), dates[1].toISOString()]);
+            } else {
+              setDateRange(null);
+            }
+          }}
+        />
+        <Button type="primary" icon={<SearchOutlined />} loading={loading} onClick={handleCompare}>
+          对比变更
+        </Button>
+        {total > 0 && <Tag color="blue">{total} 个文件变更</Tag>}
+      </Space>
+      {diffs.length > 0 && (
+        <Collapse
+          items={diffs.map((d: any, i: number) => ({
+            key: String(i),
+            label: (
+              <Space>
+                <Tag color={d.newFile ? 'green' : d.deletedFile ? 'red' : 'orange'}>
+                  {d.newFile ? '新增' : d.deletedFile ? '删除' : '修改'}
+                </Tag>
+                <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{d.path}</span>
+              </Space>
+            ),
+            children: (
+              <pre style={{ maxHeight: 400, overflow: 'auto', background: '#f8fafc', padding: 12, fontSize: 12, borderRadius: 6 }}>
+                {d.diff || '(无内容差异)'}
+              </pre>
+            ),
+          }))}
+        />
+      )}
+    </div>
+  );
+}
 
 export default function SyncHistory() {
   const [records, setRecords] = useState<SyncRecord[]>([]);
@@ -135,6 +215,12 @@ export default function SyncHistory() {
   return (
     <div>
       <h2>同步历史</h2>
+
+      {/* 变更对比 */}
+      <Card size="small" title="📊 变更对比（对比指定时间段的 GitLab YAML 变化）" style={{ marginBottom: 16 }}>
+        <CompareSection />
+      </Card>
+
       <ErrorAlert error={error} onRetry={fetchHistory} />
       <Space style={{ marginBottom: 16 }} wrap>
         <Input placeholder="ConfigMap 名称" allowClear onChange={(e) => setFilter((f) => ({ ...f, name: e.target.value || undefined }))} style={{ width: 160 }} />
