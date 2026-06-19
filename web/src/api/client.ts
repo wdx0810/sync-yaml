@@ -306,5 +306,9 @@ export const api = {
   getHistoryRecord: (id: string) => apiClient.get<SyncRecord>(`/history/${id}`),
   compareChanges: (taskId: string, since: string, until: string) =>
     apiClient.get<{ taskId: string; since: string; until: string; total: number; diffs: any[] }>('/compare', { params: { taskId, since, until } }),
+  listCommits: (taskId: string, limit?: number) =>
+    apiClient.get<any[]>('/compare/commits', { params: { taskId, limit: limit || 50 } }),
+  compareByCommit: (taskId: string, from: string, to: string) =>
+    apiClient.get<{ total: number; diffs: any[] }>('/compare/by-commit', { params: { taskId, from, to } }),
   checkGitLab: () => apiClient.post('/check-gitlab'),
 };

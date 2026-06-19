@@ -63,6 +63,19 @@ type Client interface {
 	CommitFiles(ctx context.Context, files []FileCommitAction, message string) error
 	// CompareByTime returns diffs between two time points on the branch.
 	CompareByTime(ctx context.Context, since, until string, path string) ([]FileDiff, error)
+	// ListCommits returns recent commits for the branch/path.
+	ListCommits(ctx context.Context, path string, limit int) ([]CommitInfo, error)
+	// CompareCommits returns diffs between two commit SHAs.
+	CompareCommits(ctx context.Context, from, to string, path string) ([]FileDiff, error)
+}
+
+// CommitInfo represents a GitLab commit summary.
+type CommitInfo struct {
+	ID        string `json:"id"`
+	ShortID   string `json:"shortId"`
+	Title     string `json:"title"`
+	Author    string `json:"author"`
+	CreatedAt string `json:"createdAt"`
 }
 
 // ConnectionStatus represents the GitLab connection state.
@@ -384,6 +397,67 @@ func (c *clientImpl) CompareByTime(ctx context.Context, since, until string, pat
 			p = d.OldPath
 		}
 		// Filter by path prefix if specified.
+		if path != "" && !strings.HasPrefix(p, path) {
+			continue
+		}
+		diffs = append(diffs, FileDiff{
+			Path:        p,
+			OldPath:     d.OldPath,
+			NewFile:     d.NewFile,
+			DeletedFile: d.DeletedFile,
+			Diff:        d.Diff,
+		})
+	}
+	return diffs, nil
+}
+
+// ListCommits returns recent commits for the branch/path.
+func (c *clientImpl) ListCommits(ctx context.Context, path string, limit int) ([]CommitInfo, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	opts := &gogitlab.ListCommitsOptions{
+		RefName:     gogitlab.Ptr(c.branch),
+		ListOptions: gogitlab.ListOptions{PerPage: limit},
+	}
+	if path != "" {
+		opts.Path = gogitlab.Ptr(path)
+	}
+
+	commits, _, err := c.gl.Commits.ListCommits(c.projectID, opts, gogitlab.WithContext(ctx))
+	if err != nil {
+		return nil, c.handleError("ListCommits", err)
+	}
+
+	var result []CommitInfo
+	for _, cm := range commits {
+		result = append(result, CommitInfo{
+			ID:        cm.ID,
+			ShortID:   cm.ShortID,
+			Title:     cm.Title,
+			Author:    cm.AuthorName,
+			CreatedAt: cm.CreatedAt.Format(time.RFC3339),
+		})
+	}
+	return result, nil
+}
+
+// CompareCommits returns diffs between two commit SHAs.
+func (c *clientImpl) CompareCommits(ctx context.Context, from, to string, path string) ([]FileDiff, error) {
+	compare, _, err := c.gl.Repositories.Compare(c.projectID, &gogitlab.CompareOptions{
+		From: gogitlab.Ptr(from),
+		To:   gogitlab.Ptr(to),
+	}, gogitlab.WithContext(ctx))
+	if err != nil {
+		return nil, c.handleError("CompareCommits", err)
+	}
+
+	var diffs []FileDiff
+	for _, d := range compare.Diffs {
+		p := d.NewPath
+		if p == "" {
+			p = d.OldPath
+		}
 		if path != "" && !strings.HasPrefix(p, path) {
 			continue
 		}

@@ -152,6 +152,8 @@ func (s *Server) registerRoutes() {
 	api.HandleFunc("/history", s.getHistory).Methods("GET")
 	api.HandleFunc("/history/{id}", s.getHistoryRecord).Methods("GET")
 	api.HandleFunc("/compare", s.handleCompare).Methods("GET")
+	api.HandleFunc("/compare/commits", s.handleListCommits).Methods("GET")
+	api.HandleFunc("/compare/by-commit", s.handleCompareByCommit).Methods("GET")
 	api.HandleFunc("/check-gitlab", s.checkGitLab).Methods("POST")
 	api.HandleFunc("/status", s.getStatus).Methods("GET")
 

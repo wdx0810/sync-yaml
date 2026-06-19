@@ -11,7 +11,11 @@ const { RangePicker } = DatePicker;
 function CompareSection() {
   const [tasks, setTasks] = useState<SyncTask[]>([]);
   const [taskId, setTaskId] = useState<string>('');
+  const [mode, setMode] = useState<'time' | 'commit'>('time');
   const [dateRange, setDateRange] = useState<[string, string] | null>(null);
+  const [commits, setCommits] = useState<any[]>([]);
+  const [fromSHA, setFromSHA] = useState<string>('');
+  const [toSHA, setToSHA] = useState<string>('');
   const [diffs, setDiffs] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [total, setTotal] = useState(0);
@@ -20,17 +24,28 @@ function CompareSection() {
     api.getTasks().then(res => setTasks(res.data || [])).catch(() => {});
   }, []);
 
-  const handleCompare = async () => {
-    if (!taskId || !dateRange) {
-      message.warning('请选择任务和时间范围');
-      return;
+  // Load commits when task changes and mode is 'commit'.
+  useEffect(() => {
+    if (mode === 'commit' && taskId) {
+      api.listCommits(taskId, 50).then(res => setCommits(res.data || [])).catch(() => {});
     }
+  }, [mode, taskId]);
+
+  const handleCompare = async () => {
+    if (!taskId) { message.warning('请选择任务'); return; }
     setLoading(true);
     try {
-      const res = await api.compareChanges(taskId, dateRange[0], dateRange[1]);
-      setDiffs((res.data as any).diffs || []);
-      setTotal((res.data as any).total || 0);
-      if ((res.data as any).total === 0) message.info('该时间段内无变更');
+      let res: any;
+      if (mode === 'time') {
+        if (!dateRange) { message.warning('请选择时间范围'); setLoading(false); return; }
+        res = await api.compareChanges(taskId, dateRange[0], dateRange[1]);
+      } else {
+        if (!fromSHA || !toSHA) { message.warning('请选择两个 commit'); setLoading(false); return; }
+        res = await api.compareByCommit(taskId, fromSHA, toSHA);
+      }
+      setDiffs(res.data.diffs || []);
+      setTotal(res.data.total || 0);
+      if (res.data.total === 0) message.info('该范围内无变更');
     } catch (e: any) {
       message.error(e.message || '对比失败');
     } finally {
@@ -44,20 +59,50 @@ function CompareSection() {
         <Select
           placeholder="选择同步任务"
           value={taskId || undefined}
-          onChange={setTaskId}
+          onChange={(v) => { setTaskId(v); setDiffs([]); setTotal(0); }}
           style={{ width: 220 }}
           options={tasks.map(t => ({ label: `${t.name} (${t.direction === 'reverse' ? 'K8s→Git' : 'Git→K8s'})`, value: t.id }))}
         />
-        <RangePicker
-          showTime
-          onChange={(dates) => {
-            if (dates && dates[0] && dates[1]) {
-              setDateRange([dates[0].toISOString(), dates[1].toISOString()]);
-            } else {
-              setDateRange(null);
-            }
-          }}
+        <Select
+          value={mode}
+          onChange={(v) => { setMode(v); setDiffs([]); setTotal(0); }}
+          style={{ width: 130 }}
+          options={[{ label: '按时间段', value: 'time' }, { label: '按 Commit', value: 'commit' }]}
         />
+        {mode === 'time' && (
+          <RangePicker
+            showTime
+            onChange={(dates) => {
+              if (dates && dates[0] && dates[1]) {
+                setDateRange([dates[0].toISOString(), dates[1].toISOString()]);
+              } else {
+                setDateRange(null);
+              }
+            }}
+          />
+        )}
+        {mode === 'commit' && (
+          <>
+            <Select
+              placeholder="From (旧)"
+              value={fromSHA || undefined}
+              onChange={setFromSHA}
+              style={{ width: 280 }}
+              showSearch
+              optionFilterProp="label"
+              options={commits.map(c => ({ label: `${c.shortId} - ${c.title} (${new Date(c.createdAt).toLocaleDateString()})`, value: c.id }))}
+            />
+            <Select
+              placeholder="To (新)"
+              value={toSHA || undefined}
+              onChange={setToSHA}
+              style={{ width: 280 }}
+              showSearch
+              optionFilterProp="label"
+              options={commits.map(c => ({ label: `${c.shortId} - ${c.title} (${new Date(c.createdAt).toLocaleDateString()})`, value: c.id }))}
+            />
+          </>
+        )}
         <Button type="primary" icon={<SearchOutlined />} loading={loading} onClick={handleCompare}>
           对比变更
         </Button>
