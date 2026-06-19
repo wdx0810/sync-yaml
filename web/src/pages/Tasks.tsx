@@ -101,11 +101,14 @@ export default function Tasks() {
     // Reverse sync (K8s → GitLab): direct commit, no preview.
     if (task.direction === 'reverse') {
       setSyncingId(task.id);
+      const hide = message.loading(`正在同步 "${task.name}"（K8s → GitLab）...`, 0);
       try {
         const res = await api.syncTask(task.id);
+        hide();
         showSyncResult(res.data);
         fetchAll();
       } catch (e: any) {
+        hide();
         message.error(e.message || '同步失败');
       } finally {
         setSyncingId(null);
@@ -120,11 +123,17 @@ export default function Tasks() {
     setPreviewLoading(true);
     setPreviewChanges([]);
     setPreviewSummary(undefined);
+    const hide = message.loading(`正在计算变更 "${task.name}"（拉取 GitLab + 对比 K8s）...`, 0);
     try {
       const res = await api.previewSync(task.id);
+      hide();
       setPreviewChanges(res.data.changes || []);
       setPreviewSummary(res.data.summary);
+      if ((res.data.changes || []).length === 0) {
+        message.info('没有需要同步的变更');
+      }
     } catch (e: any) {
+      hide();
       message.error(e.message || '预览失败');
       setPreviewOpen(false);
     } finally {
@@ -136,12 +145,15 @@ export default function Tasks() {
   const handleApprove = async (selected: PendingChange[]) => {
     if (!previewTaskId) return;
     setApplying(true);
+    const hide = message.loading(`正在应用 ${selected.length} 项变更到 K8s...`, 0);
     try {
       const res = await api.applyChanges(previewTaskId, selected);
+      hide();
       showSyncResult(res.data);
       setPreviewOpen(false);
       fetchAll();
     } catch (e: any) {
+      hide();
       message.error(e.message || '应用失败');
     } finally {
       setApplying(false);

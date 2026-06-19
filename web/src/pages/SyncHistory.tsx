@@ -34,19 +34,22 @@ function CompareSection() {
   const handleCompare = async () => {
     if (!taskId) { message.warning('请选择任务'); return; }
     setLoading(true);
+    const hide = message.loading('正在从 GitLab 获取变更对比...', 0);
     try {
       let res: any;
       if (mode === 'time') {
-        if (!dateRange) { message.warning('请选择时间范围'); setLoading(false); return; }
+        if (!dateRange) { message.warning('请选择时间范围'); hide(); setLoading(false); return; }
         res = await api.compareChanges(taskId, dateRange[0], dateRange[1]);
       } else {
-        if (!fromSHA || !toSHA) { message.warning('请选择两个 commit'); setLoading(false); return; }
+        if (!fromSHA || !toSHA) { message.warning('请选择两个 commit'); hide(); setLoading(false); return; }
         res = await api.compareByCommit(taskId, fromSHA, toSHA);
       }
+      hide();
       setDiffs(res.data.diffs || []);
       setTotal(res.data.total || 0);
       if (res.data.total === 0) message.info('该范围内无变更');
     } catch (e: any) {
+      hide();
       message.error(e.message || '对比失败');
     } finally {
       setLoading(false);
