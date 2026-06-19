@@ -6,6 +6,7 @@ import {
   DatabaseOutlined,
   SyncOutlined,
   HistoryOutlined,
+  DiffOutlined,
   LogoutOutlined,
   KeyOutlined,
   SafetyOutlined,
@@ -16,6 +17,7 @@ import Dashboard from './pages/Dashboard';
 import Connections from './pages/Connections';
 import Tasks from './pages/Tasks';
 import SyncHistory from './pages/SyncHistory';
+import CompareChanges from './pages/CompareChanges';
 import MFASettings from './pages/MFASettings';
 import Users from './pages/Users';
 import Login from './pages/Login';
@@ -84,6 +86,7 @@ function AppContent({ username, onLogout }: { username: string; onLogout: () => 
             { key: 'connections', icon: <DatabaseOutlined />, label: <Link to="/connections">数据源</Link> },
             { key: 'tasks', icon: <SyncOutlined />, label: <Link to="/tasks">同步任务</Link> },
             { key: 'history', icon: <HistoryOutlined />, label: <Link to="/history">同步历史</Link> },
+            { key: 'compare', icon: <DiffOutlined />, label: <Link to="/compare">变更对比</Link> },
           ]}
         />
         <div className="menu-section-label">设置</div>
@@ -115,6 +118,7 @@ function AppContent({ username, onLogout }: { username: string; onLogout: () => 
             <Route path="/connections" element={<Connections />} />
             <Route path="/tasks" element={<Tasks />} />
             <Route path="/history" element={<SyncHistory />} />
+            <Route path="/compare" element={<CompareChanges />} />
             <Route path="/mfa" element={<MFASettings />} />
             {role === 'admin' && <Route path="/users" element={<Users />} />}
           </Routes>
