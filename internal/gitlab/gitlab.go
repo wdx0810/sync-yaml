@@ -335,6 +335,9 @@ func (c *clientImpl) CommitFiles(ctx context.Context, files []FileCommitAction, 
 // CompareByTime returns diffs between two time points on the branch.
 // Uses GitLab Commits API to find commits at those times, then Compare.
 func (c *clientImpl) CompareByTime(ctx context.Context, since, until string, path string) ([]FileDiff, error) {
+	// GitLab API path must not have leading slash.
+	path = strings.TrimPrefix(path, "/")
+
 	// List commits in the time range to get the boundary SHAs.
 	sinceTime, err := time.Parse(time.RFC3339, since)
 	if err != nil {
@@ -345,43 +348,47 @@ func (c *clientImpl) CompareByTime(ctx context.Context, since, until string, pat
 		return nil, fmt.Errorf("invalid until time: %w", err)
 	}
 
-	// Get the earliest commit at or before 'since' as the base.
+	// List all commits in the time range.
 	opts := &gogitlab.ListCommitsOptions{
 		RefName: gogitlab.Ptr(c.branch),
-		Until:   gogitlab.Ptr(sinceTime),
-		ListOptions: gogitlab.ListOptions{PerPage: 1},
+		Since:   gogitlab.Ptr(sinceTime),
+		Until:   gogitlab.Ptr(untilTime),
+		ListOptions: gogitlab.ListOptions{PerPage: 100},
 	}
 	if path != "" {
 		opts.Path = gogitlab.Ptr(path)
 	}
 
-	baseSHA := c.branch + "~1" // fallback: compare from parent
-	baseCommits, _, err := c.gl.Commits.ListCommits(c.projectID, opts, gogitlab.WithContext(ctx))
-	if err == nil && len(baseCommits) > 0 {
-		baseSHA = baseCommits[0].ID
+	commitsInRange, _, err := c.gl.Commits.ListCommits(c.projectID, opts, gogitlab.WithContext(ctx))
+	if err != nil {
+		return nil, c.handleError("CompareByTime.ListCommits", err)
 	}
 
-	// Get the latest commit at or before 'until' as the head.
-	opts2 := &gogitlab.ListCommitsOptions{
+	if len(commitsInRange) == 0 {
+		return nil, nil // no commits in this period
+	}
+
+	// headSHA = the latest commit in range (first in list, since sorted by date desc).
+	headSHA := commitsInRange[0].ID
+	// baseSHA = the parent of the oldest commit in range.
+	oldestSHA := commitsInRange[len(commitsInRange)-1].ID
+
+	// Get the parent of the oldest commit by listing one commit before 'since'.
+	beforeOpts := &gogitlab.ListCommitsOptions{
 		RefName: gogitlab.Ptr(c.branch),
-		Until:   gogitlab.Ptr(untilTime),
+		Until:   gogitlab.Ptr(sinceTime),
 		ListOptions: gogitlab.ListOptions{PerPage: 1},
 	}
 	if path != "" {
-		opts2.Path = gogitlab.Ptr(path)
+		beforeOpts.Path = gogitlab.Ptr(path)
+	}
+	beforeCommits, _, _ := c.gl.Commits.ListCommits(c.projectID, beforeOpts, gogitlab.WithContext(ctx))
+	baseSHA := oldestSHA + "~1" // fallback: parent of oldest
+	if len(beforeCommits) > 0 {
+		baseSHA = beforeCommits[0].ID
 	}
 
-	headSHA := c.branch
-	headCommits, _, err := c.gl.Commits.ListCommits(c.projectID, opts2, gogitlab.WithContext(ctx))
-	if err == nil && len(headCommits) > 0 {
-		headSHA = headCommits[0].ID
-	}
-
-	if baseSHA == headSHA {
-		return nil, nil // no changes in this period
-	}
-
-	// Compare.
+	// Compare base to head.
 	compare, _, err := c.gl.Repositories.Compare(c.projectID, &gogitlab.CompareOptions{
 		From: gogitlab.Ptr(baseSHA),
 		To:   gogitlab.Ptr(headSHA),
@@ -416,6 +423,9 @@ func (c *clientImpl) ListCommits(ctx context.Context, path string, limit int) ([
 	if limit <= 0 {
 		limit = 50
 	}
+	// GitLab API path must not have leading slash.
+	path = strings.TrimPrefix(path, "/")
+
 	opts := &gogitlab.ListCommitsOptions{
 		RefName:     gogitlab.Ptr(c.branch),
 		ListOptions: gogitlab.ListOptions{PerPage: limit},
@@ -444,6 +454,9 @@ func (c *clientImpl) ListCommits(ctx context.Context, path string, limit int) ([
 
 // CompareCommits returns diffs between two commit SHAs.
 func (c *clientImpl) CompareCommits(ctx context.Context, from, to string, path string) ([]FileDiff, error) {
+	// GitLab API path must not have leading slash.
+	path = strings.TrimPrefix(path, "/")
+
 	compare, _, err := c.gl.Repositories.Compare(c.projectID, &gogitlab.CompareOptions{
 		From: gogitlab.Ptr(from),
 		To:   gogitlab.Ptr(to),
