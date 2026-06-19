@@ -8,6 +8,40 @@ import ErrorAlert from '../components/ErrorAlert';
 
 const { RangePicker } = DatePicker;
 
+// Build a text file from the compare diffs and trigger a browser download.
+function exportDiffs(diffs: any[], taskId: string, range: [string, string] | null) {
+  const lines: string[] = [];
+  lines.push('YAML 变更对比导出');
+  lines.push(`任务ID: ${taskId}`);
+  if (range && range[0] && range[1]) {
+    lines.push(`对比范围: ${range[0]}  ~  ${range[1]}`);
+  }
+  lines.push(`导出时间: ${new Date().toLocaleString()}`);
+  lines.push(`文件变更数: ${diffs.length}`);
+  lines.push('='.repeat(80));
+  lines.push('');
+
+  for (const d of diffs) {
+    const status = d.newFile ? '[新增]' : d.deletedFile ? '[删除]' : '[修改]';
+    lines.push(`${status} ${d.path}`);
+    lines.push('-'.repeat(80));
+    lines.push(d.diff || '(无内容差异)');
+    lines.push('');
+  }
+
+  const content = lines.join('\n');
+  const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  a.href = url;
+  a.download = `yaml-diff-${taskId}-${ts}.txt`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 function CompareSection() {
   const [tasks, setTasks] = useState<SyncTask[]>([]);
   const [taskId, setTaskId] = useState<string>('');
@@ -110,6 +144,11 @@ function CompareSection() {
           对比变更
         </Button>
         {total > 0 && <Tag color="blue">{total} 个文件变更</Tag>}
+        {diffs.length > 0 && (
+          <Button onClick={() => exportDiffs(diffs, taskId, mode === 'time' ? dateRange : [fromSHA, toSHA])}>
+            导出
+          </Button>
+        )}
       </Space>
       {diffs.length > 0 && (
         <Collapse
