@@ -8,6 +8,15 @@ import ErrorAlert from '../components/ErrorAlert';
 
 const { RangePicker } = DatePicker;
 
+// Extract the resource type (parent folder name) from a GitLab file path.
+// Paths look like ".../lion-app-eu/deployments/xxx.yaml" -> "deployments".
+function resourceTypeOf(path: string): string {
+  if (!path) return '未知';
+  const parts = path.split('/').filter(Boolean);
+  if (parts.length >= 2) return parts[parts.length - 2];
+  return '未知';
+}
+
 // Build a text file from the compare diffs and trigger a browser download.
 function exportDiffs(diffs: any[], taskId: string, range: [string, string] | null) {
   const lines: string[] = [];
@@ -53,6 +62,7 @@ function CompareSection() {
   const [diffs, setDiffs] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [total, setTotal] = useState(0);
+  const [typeFilter, setTypeFilter] = useState<string[]>([]);
 
   useEffect(() => {
     api.getTasks().then(res => setTasks(res.data || [])).catch(() => {});
@@ -81,6 +91,7 @@ function CompareSection() {
       hide();
       setDiffs(res.data.diffs || []);
       setTotal(res.data.total || 0);
+      setTypeFilter([]);
       if (res.data.total === 0) message.info('该范围内无变更');
     } catch (e: any) {
       hide();
@@ -90,19 +101,29 @@ function CompareSection() {
     }
   };
 
+  const availableTypes = Array.from(new Set(diffs.map((d: any) => resourceTypeOf(d.path)))).sort();
+  const typeCounts: Record<string, number> = {};
+  for (const d of diffs) {
+    const t = resourceTypeOf(d.path);
+    typeCounts[t] = (typeCounts[t] || 0) + 1;
+  }
+  const filteredDiffs = typeFilter.length === 0
+    ? diffs
+    : diffs.filter((d: any) => typeFilter.includes(resourceTypeOf(d.path)));
+
   return (
     <div>
       <Space wrap style={{ marginBottom: diffs.length > 0 ? 12 : 0 }}>
         <Select
           placeholder="选择同步任务"
           value={taskId || undefined}
-          onChange={(v) => { setTaskId(v); setDiffs([]); setTotal(0); }}
+          onChange={(v) => { setTaskId(v); setDiffs([]); setTotal(0); setTypeFilter([]); }}
           style={{ width: 220 }}
           options={tasks.map(t => ({ label: `${t.name} (${t.direction === 'reverse' ? 'K8s→Git' : 'Git→K8s'})`, value: t.id }))}
         />
         <Select
           value={mode}
-          onChange={(v) => { setMode(v); setDiffs([]); setTotal(0); }}
+          onChange={(v) => { setMode(v); setDiffs([]); setTotal(0); setTypeFilter([]); }}
           style={{ width: 130 }}
           options={[{ label: '按时间段', value: 'time' }, { label: '按 Commit', value: 'commit' }]}
         />
@@ -143,22 +164,35 @@ function CompareSection() {
         <Button type="primary" icon={<SearchOutlined />} loading={loading} onClick={handleCompare}>
           对比变更
         </Button>
-        {total > 0 && <Tag color="blue">{total} 个文件变更</Tag>}
-        {diffs.length > 0 && (
-          <Button onClick={() => exportDiffs(diffs, taskId, mode === 'time' ? dateRange : [fromSHA, toSHA])}>
+        {diffs.length > 0 && availableTypes.length > 0 && (
+          <Select
+            mode="multiple"
+            allowClear
+            placeholder="按资源类型筛选"
+            value={typeFilter}
+            onChange={setTypeFilter}
+            style={{ minWidth: 220 }}
+            maxTagCount="responsive"
+            options={availableTypes.map(t => ({ label: `${t} (${typeCounts[t]})`, value: t }))}
+          />
+        )}
+        {diffs.length > 0 && <Tag color="blue">{filteredDiffs.length} / {total} 个文件变更</Tag>}
+        {filteredDiffs.length > 0 && (
+          <Button onClick={() => exportDiffs(filteredDiffs, taskId, mode === 'time' ? dateRange : [fromSHA, toSHA])}>
             导出
           </Button>
         )}
       </Space>
-      {diffs.length > 0 && (
+      {filteredDiffs.length > 0 && (
         <Collapse
-          items={diffs.map((d: any, i: number) => ({
+          items={filteredDiffs.map((d: any, i: number) => ({
             key: String(i),
             label: (
               <Space>
                 <Tag color={d.newFile ? 'green' : d.deletedFile ? 'red' : 'orange'}>
                   {d.newFile ? '新增' : d.deletedFile ? '删除' : '修改'}
                 </Tag>
+                <Tag>{resourceTypeOf(d.path)}</Tag>
                 <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{d.path}</span>
               </Space>
             ),
