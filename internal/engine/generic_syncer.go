@@ -690,7 +690,19 @@ func (s *GenericSyncer) ReverseSync(ctx context.Context, gc gitlab.Client, dc k8
 			var oldYAML string
 			action := "created"
 			if existing, ok := existingContent[filePath]; ok {
-				if strings.TrimSpace(existing) == strings.TrimSpace(string(yamlBytes)) {
+				// Use semantic comparison (same as forward sync) instead of a raw
+				// string compare. A byte-for-byte compare produces spurious diffs
+				// because key ordering, indentation, number formatting and cleaner
+				// version drift differ between the stored GitLab file and the YAML
+				// freshly printed from K8s — even when the resources are identical.
+				same := false
+				if existingRes, perr := s.parser.Parse([]byte(existing)); perr == nil {
+					same = diff.IsSameContent(s.cleaner, existingRes.Object, obj)
+				} else {
+					// Fall back to trimmed string compare if the stored file can't be parsed.
+					same = strings.TrimSpace(existing) == strings.TrimSpace(string(yamlBytes))
+				}
+				if same {
 					info.Skipped++
 					continue
 				}
