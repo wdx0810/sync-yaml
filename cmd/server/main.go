@@ -75,6 +75,9 @@ func main() {
 	// Initialize notify store.
 	notifyStore := store.NewNotifyStore(storagePath)
 
+	// Initialize change request store (independent ConfigMap edit → approve → commit module).
+	changeReqStore := store.NewChangeRequestStore(storagePath)
+
 	// Initialize task manager.
 	taskMgr := engine.NewTaskManager(sourceStore, targetStore, taskStoreRef, historyStore, notifyStore)
 
@@ -88,6 +91,7 @@ func main() {
 		ConnTester:  connTester,
 		UserStore:   userStore,
 		NotifyStore: notifyStore,
+		ChangeRequestStore: changeReqStore,
 		StoragePath: storagePath,
 	})
 	router := apiServer.Router()

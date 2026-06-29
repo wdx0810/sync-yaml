@@ -67,6 +67,10 @@ type Client interface {
 	ListCommits(ctx context.Context, path string, limit int) ([]CommitInfo, error)
 	// CompareCommits returns diffs between two commit SHAs.
 	CompareCommits(ctx context.Context, from, to string, path string) ([]FileDiff, error)
+	// ListFiles lists all YAML file paths under the given path (no content fetch).
+	ListFiles(ctx context.Context, path string) ([]string, error)
+	// GetFile fetches the raw content of a single file.
+	GetFile(ctx context.Context, path string) ([]byte, error)
 }
 
 // CommitInfo represents a GitLab commit summary.
@@ -233,6 +237,55 @@ func (c *clientImpl) getFileContent(ctx context.Context, path string) ([]byte, e
 		return nil, err
 	}
 	return raw, nil
+}
+
+// ListFiles lists all YAML file paths under the given path (no content fetch).
+func (c *clientImpl) ListFiles(ctx context.Context, path string) ([]string, error) {
+	if path == "" {
+		path = c.basePath
+	}
+	path = strings.TrimPrefix(path, "/")
+
+	opts := &gogitlab.ListTreeOptions{
+		Path:      gogitlab.Ptr(path),
+		Ref:       gogitlab.Ptr(c.branch),
+		Recursive: gogitlab.Ptr(true),
+		ListOptions: gogitlab.ListOptions{
+			PerPage: 100,
+		},
+	}
+
+	var filePaths []string
+	for {
+		nodes, resp, err := c.gl.Repositories.ListTree(c.projectID, opts, gogitlab.WithContext(ctx))
+		if err != nil {
+			return nil, c.handleError("ListFiles", err)
+		}
+		for _, node := range nodes {
+			if node.Type != "blob" || !isYAMLFile(node.Path) {
+				continue
+			}
+			filePaths = append(filePaths, node.Path)
+		}
+		if resp.NextPage == 0 {
+			break
+		}
+		opts.Page = resp.NextPage
+	}
+
+	c.status = StatusConnected
+	return filePaths, nil
+}
+
+// GetFile fetches the raw content of a single file.
+func (c *clientImpl) GetFile(ctx context.Context, path string) ([]byte, error) {
+	path = strings.TrimPrefix(path, "/")
+	content, err := c.getFileContent(ctx, path)
+	if err != nil {
+		return nil, c.handleError("GetFile", err)
+	}
+	c.status = StatusConnected
+	return content, nil
 }
 
 // CheckChanges detects file changes since the given commit SHA.

@@ -30,6 +30,7 @@ type Server struct {
 	connTester  store.ConnectionTester
 	userStore   store.UserStore
 	notifyStore store.NotifyStore
+	changeReqStore store.ChangeRequestStore
 	router      *mux.Router
 	logger      *slog.Logger
 	storagePath string
@@ -47,6 +48,7 @@ type ServerConfig struct {
 	ConnTester  store.ConnectionTester
 	UserStore   store.UserStore
 	NotifyStore store.NotifyStore
+	ChangeRequestStore store.ChangeRequestStore
 	StoragePath string
 }
 
@@ -63,6 +65,7 @@ func NewServer(cfg ServerConfig) *Server {
 		connTester:  cfg.ConnTester,
 		userStore:   cfg.UserStore,
 		notifyStore: cfg.NotifyStore,
+		changeReqStore: cfg.ChangeRequestStore,
 		router:      mux.NewRouter(),
 		logger:      slog.Default().With("component", "api"),
 		storagePath: cfg.StoragePath,
@@ -198,6 +201,17 @@ func (s *Server) registerRoutes() {
 
 	// Dashboard endpoint.
 	api.HandleFunc("/dashboard", s.getDashboardData).Methods("GET")
+
+	// Change requests (ConfigMap edit → approve → commit to GitLab).
+	// Fully independent module; does not affect sync logic.
+	api.HandleFunc("/change-requests", s.listChangeRequests).Methods("GET")
+	api.HandleFunc("/change-requests", s.createChangeRequest).Methods("POST")
+	api.HandleFunc("/change-requests/configmaps", s.listChangeRequestConfigMaps).Methods("GET")
+	api.HandleFunc("/change-requests/load-file", s.loadChangeRequestFile).Methods("GET")
+	api.HandleFunc("/change-requests/{id}", s.getChangeRequest).Methods("GET")
+	api.HandleFunc("/change-requests/{id}", s.deleteChangeRequest).Methods("DELETE")
+	api.HandleFunc("/change-requests/{id}/approve", s.approveChangeRequest).Methods("POST")
+	api.HandleFunc("/change-requests/{id}/reject", s.rejectChangeRequest).Methods("POST")
 }
 
 // requireAdmin middleware checks if the current user is an admin.

@@ -47,6 +47,37 @@ type SyncTask struct {
 	ErrorMessage   string   `json:"errorMessage,omitempty"`
 }
 
+// ChangeRequest represents a developer's request to modify a ConfigMap and
+// have it committed to GitLab after approval. This module is fully independent
+// of the sync engine — approving a request only writes to GitLab; it never
+// touches K8s or the sync tasks.
+type ChangeRequest struct {
+	ID          string `json:"id"`
+	TaskID      string `json:"taskId"`      // related sync task (locates the GitLab source + path / environment)
+	TaskName    string `json:"taskName"`    // denormalized for display
+	Project     string `json:"project,omitempty"`
+	Namespace   string `json:"namespace"`   // ConfigMap namespace
+	Name        string `json:"name"`        // ConfigMap name
+	FilePath    string `json:"filePath"`    // resolved GitLab file path
+	OldYAML     string `json:"oldYaml"`     // content at submit time (for diff)
+	NewYAML     string `json:"newYaml"`     // proposed content
+	Reason      string `json:"reason"`      // change description
+	Status      string `json:"status"`      // pending / approved / rejected
+	Requester   string `json:"requester"`
+	Reviewer    string `json:"reviewer,omitempty"`
+	ReviewNote  string `json:"reviewNote,omitempty"`
+	CommitError string `json:"commitError,omitempty"`
+	CreatedAt   string `json:"createdAt"`
+	ReviewedAt  string `json:"reviewedAt,omitempty"`
+}
+
+// Change request statuses.
+const (
+	ChangeRequestPending  = "pending"
+	ChangeRequestApproved = "approved"
+	ChangeRequestRejected = "rejected"
+)
+
 // ErrNotFound is returned when an entity is not found.
 type ErrNotFound struct {
 	Entity string

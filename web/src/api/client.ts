@@ -228,8 +228,27 @@ export interface PreviewResult {
   summary: SyncSummary;
 }
 
-// ---- API ----
+export interface ChangeRequest {
+  id: string;
+  taskId: string;
+  taskName: string;
+  project?: string;
+  namespace: string;
+  name: string;
+  filePath: string;
+  oldYaml: string;
+  newYaml: string;
+  reason: string;
+  status: string;
+  requester: string;
+  reviewer?: string;
+  reviewNote?: string;
+  commitError?: string;
+  createdAt: string;
+  reviewedAt?: string;
+}
 
+// ---- API ----
 export const api = {
   // Dashboard
   getDashboard: () => apiClient.get<DashboardData>('/dashboard'),
@@ -311,4 +330,20 @@ export const api = {
   compareByCommit: (taskId: string, from: string, to: string) =>
     apiClient.get<{ total: number; diffs: any[] }>('/compare/by-commit', { params: { taskId, from, to } }),
   checkGitLab: () => apiClient.post('/check-gitlab'),
+
+  // Change requests (ConfigMap edit → approve → commit to GitLab).
+  listChangeRequests: (status?: string) =>
+    apiClient.get<ChangeRequest[]>('/change-requests', { params: status ? { status } : {} }),
+  getChangeRequest: (id: string) => apiClient.get<ChangeRequest>(`/change-requests/${id}`),
+  listChangeRequestConfigMaps: (taskId: string) =>
+    apiClient.get<{ namespace: string; name: string; path: string }[]>('/change-requests/configmaps', { params: { taskId } }),
+  loadChangeRequestFile: (taskId: string, namespace: string, name: string) =>
+    apiClient.get<{ filePath: string; content: string }>('/change-requests/load-file', { params: { taskId, namespace, name } }),
+  createChangeRequest: (body: { taskId: string; namespace: string; name: string; newYaml: string; reason: string }) =>
+    apiClient.post<ChangeRequest>('/change-requests', body),
+  approveChangeRequest: (id: string, note?: string) =>
+    apiClient.post<ChangeRequest>(`/change-requests/${id}/approve`, { note: note || '' }),
+  rejectChangeRequest: (id: string, note?: string) =>
+    apiClient.post<ChangeRequest>(`/change-requests/${id}/reject`, { note: note || '' }),
+  deleteChangeRequest: (id: string) => apiClient.delete(`/change-requests/${id}`),
 };
