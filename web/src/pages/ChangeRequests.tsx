@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Tabs, Select, Input, Button, Space, Tag, Table, Modal, message, Card, Form } from 'antd';
+import { EditOutlined } from '@ant-design/icons';
 import ReactDiffViewer from 'react-diff-viewer-continued';
 import { api } from '../api/client';
 import type { SyncTask, ChangeRequest } from '../api/client';
@@ -17,9 +18,11 @@ function SubmitChange({ onSubmitted }: { onSubmitted: () => void }) {
   const [taskId, setTaskId] = useState<string>('');
   const [configMaps, setConfigMaps] = useState<{ namespace: string; name: string; path: string }[]>([]);
   const [selected, setSelected] = useState<string>(''); // "namespace/name"
-  const [content, setContent] = useState<string>('');
-  const [original, setOriginal] = useState<string>('');
+  const [content, setContent] = useState<string>('');   // current (saved) content
+  const [original, setOriginal] = useState<string>(''); // original GitLab content
   const [reason, setReason] = useState<string>('');
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState<string>('');        // working copy while editing
   const [loadingCM, setLoadingCM] = useState(false);
   const [loadingFile, setLoadingFile] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -33,6 +36,7 @@ function SubmitChange({ onSubmitted }: { onSubmitted: () => void }) {
     setSelected('');
     setContent('');
     setOriginal('');
+    setEditing(false);
     setConfigMaps([]);
     setLoadingCM(true);
     const hide = message.loading('正在加载 ConfigMap 列表...', 0);
@@ -46,6 +50,7 @@ function SubmitChange({ onSubmitted }: { onSubmitted: () => void }) {
     setSelected(v);
     setContent('');
     setOriginal('');
+    setEditing(false);
     const [ns, name] = v.split('|');
     setLoadingFile(true);
     const hide = message.loading('正在加载 YAML 内容...', 0);
@@ -55,9 +60,23 @@ function SubmitChange({ onSubmitted }: { onSubmitted: () => void }) {
       .finally(() => { hide(); setLoadingFile(false); });
   };
 
+  const startEdit = () => { setDraft(content); setEditing(true); };
+  const cancelEdit = () => { setEditing(false); setDraft(''); };
+  const saveEdit = () => {
+    if (!draft.trim()) { message.warning('内容不能为空'); return; }
+    setContent(draft);
+    setEditing(false);
+    if (draft === original) {
+      message.info('内容与原始一致，未产生变更');
+    } else {
+      message.success('已保存修改（尚未提交审核）');
+    }
+  };
+
   const handleSubmit = async () => {
-    if (!taskId) { message.warning('请选择环境(任务)'); return; }
+    if (!taskId) { message.warning('请选择环境'); return; }
     if (!selected) { message.warning('请选择 ConfigMap'); return; }
+    if (editing) { message.warning('请先保存或取消当前编辑'); return; }
     if (!content.trim()) { message.warning('内容不能为空'); return; }
     if (content === original) { message.warning('内容未修改'); return; }
     if (!reason.trim()) { message.warning('请填写变更说明'); return; }
@@ -66,7 +85,7 @@ function SubmitChange({ onSubmitted }: { onSubmitted: () => void }) {
     try {
       await api.createChangeRequest({ taskId, namespace: ns, name, newYaml: content, reason });
       message.success('已提交，等待审核');
-      setSelected(''); setContent(''); setOriginal(''); setReason('');
+      setSelected(''); setContent(''); setOriginal(''); setReason(''); setEditing(false);
       onSubmitted();
     } catch (e: any) {
       message.error(e.message || '提交失败');
@@ -103,17 +122,33 @@ function SubmitChange({ onSubmitted }: { onSubmitted: () => void }) {
       </Space>
 
       {selected && (
-        <Card size="small" title="编辑 YAML 内容" style={{ marginBottom: 12 }} loading={loadingFile}>
+        <Card
+          size="small"
+          title={editing ? '编辑 YAML 内容' : 'YAML 内容（只读）'}
+          style={{ marginBottom: 12 }}
+          loading={loadingFile}
+          extra={
+            editing ? (
+              <Space>
+                <Button size="small" onClick={cancelEdit}>取消</Button>
+                <Button size="small" type="primary" onClick={saveEdit}>保存修改</Button>
+              </Space>
+            ) : (
+              <Button size="small" icon={<EditOutlined />} onClick={startEdit}>编辑</Button>
+            )
+          }
+        >
           <Input.TextArea
-            value={content}
-            onChange={(e) => setContent(e.target.value)}
+            value={editing ? draft : content}
+            onChange={(e) => setDraft(e.target.value)}
+            readOnly={!editing}
             autoSize={{ minRows: 16, maxRows: 36 }}
-            style={{ fontFamily: 'monospace', fontSize: 13 }}
+            style={{ fontFamily: 'monospace', fontSize: 13, background: editing ? undefined : '#f8fafc' }}
           />
         </Card>
       )}
 
-      {changed && (
+      {changed && !editing && (
         <Card size="small" title="变更预览（左：当前 GitLab 内容，右：修改后）" style={{ marginBottom: 12 }}>
           <div style={{ maxHeight: 400, overflow: 'auto' }}>
             <ReactDiffViewer oldValue={original} newValue={content} splitView leftTitle="当前" rightTitle="修改后" useDarkTheme={false} />
@@ -126,7 +161,8 @@ function SubmitChange({ onSubmitted }: { onSubmitted: () => void }) {
           <Form.Item label="变更说明" required>
             <Input.TextArea value={reason} onChange={(e) => setReason(e.target.value)} rows={2} placeholder="请说明本次修改的目的" />
           </Form.Item>
-          <Button type="primary" loading={submitting} onClick={handleSubmit}>提交审核</Button>
+          <Button type="primary" loading={submitting} disabled={editing || !changed} onClick={handleSubmit}>提交审核</Button>
+          {editing && <span style={{ marginLeft: 12, color: '#f59e0b' }}>请先保存或取消编辑</span>}
         </Form>
       )}
     </div>
