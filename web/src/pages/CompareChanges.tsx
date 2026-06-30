@@ -3,6 +3,7 @@ import { Select, DatePicker, Space, Tag, Collapse, Card, Button, message } from 
 import { SearchOutlined } from '@ant-design/icons';
 import { api } from '../api/client';
 import type { SyncTask } from '../api/client';
+import { buildEnvOptions } from '../utils/taskEnv';
 
 const { RangePicker } = DatePicker;
 
@@ -113,11 +114,13 @@ function CompareSection() {
     <div>
       <Space wrap style={{ marginBottom: diffs.length > 0 ? 12 : 0 }}>
         <Select
-          placeholder="选择同步任务"
+          placeholder="选择环境(GitLab 路径)"
           value={taskId || undefined}
           onChange={(v) => { setTaskId(v); setDiffs([]); setTotal(0); setTypeFilter([]); }}
-          style={{ width: 220 }}
-          options={tasks.map(t => ({ label: `${t.name} (${t.direction === 'reverse' ? 'K8s→Git' : 'Git→K8s'})`, value: t.id }))}
+          style={{ width: 280 }}
+          showSearch
+          optionFilterProp="label"
+          options={buildEnvOptions(tasks)}
         />
         <Select
           value={mode}

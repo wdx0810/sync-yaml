@@ -291,6 +291,8 @@ export default function Tasks() {
         <Select
           placeholder="按项目筛选"
           allowClear
+          showSearch
+          optionFilterProp="label"
           value={projectFilter}
           onChange={(v) => setProjectFilter(v)}
           style={{ width: 180 }}
@@ -317,13 +319,13 @@ export default function Tasks() {
             ]} />
           </Form.Item>
           <Form.Item name="sourceName" label={sourceLabel} rules={[{ required: true, message: `请选择${sourceLabel}` }]}>
-            <Select placeholder={`选择${sourceLabel}`} options={sourceOptions} />
+            <Select placeholder={`选择${sourceLabel}`} showSearch optionFilterProp="label" options={sourceOptions} />
           </Form.Item>
           <Form.Item name="sourcePath" label="GitLab 目录路径" rules={[{ required: true, message: '请输入 YAML 文件路径' }]}>
             <Input placeholder="例如: / 或 /deploy/production" />
           </Form.Item>
           <Form.Item name="targetName" label={targetLabel} rules={[{ required: true, message: `请选择${targetLabel}` }]}>
-            <Select placeholder={`选择${targetLabel}`} options={targetOptions} />
+            <Select placeholder={`选择${targetLabel}`} showSearch optionFilterProp="label" options={targetOptions} />
           </Form.Item>
           <Form.Item name="targetNamespace" label="K8s 命名空间" rules={[{ required: true, message: '请输入命名空间' }]} tooltip="多个命名空间用逗号分隔">
             <Input placeholder="例如: default 或 production,staging" />

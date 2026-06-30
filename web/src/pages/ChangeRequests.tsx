@@ -3,6 +3,7 @@ import { Tabs, Select, Input, Button, Space, Tag, Table, Modal, message, Card, F
 import ReactDiffViewer from 'react-diff-viewer-continued';
 import { api } from '../api/client';
 import type { SyncTask, ChangeRequest } from '../api/client';
+import { buildEnvOptions } from '../utils/taskEnv';
 
 const statusMeta: Record<string, { color: string; label: string }> = {
   pending: { color: 'orange', label: '待审核' },
@@ -80,11 +81,13 @@ function SubmitChange({ onSubmitted }: { onSubmitted: () => void }) {
     <div>
       <Space wrap style={{ marginBottom: 12 }}>
         <Select
-          placeholder="选择环境(同步任务)"
+          placeholder="选择环境(GitLab 路径)"
           value={taskId || undefined}
           onChange={onTaskChange}
-          style={{ width: 280 }}
-          options={tasks.map(t => ({ label: `${t.name} (${t.direction === 'reverse' ? 'K8s→Git' : 'Git→K8s'})`, value: t.id }))}
+          style={{ width: 320 }}
+          showSearch
+          optionFilterProp="label"
+          options={buildEnvOptions(tasks)}
         />
         <Select
           placeholder="选择 ConfigMap"
