@@ -27,6 +27,60 @@ export function formatYaml(raw: string): { text: string; changed: boolean; ok: b
   }
 }
 
+// parseConfigMap parses a full ConfigMap YAML and returns its metadata and data keys.
+export interface ParsedConfigMap {
+  ok: boolean;
+  kind?: string;
+  name?: string;
+  namespace?: string;
+  dataKeys: string[];      // keys under `data`
+  doc?: any;               // the parsed object (for round-trip)
+  error?: string;
+}
+
+export function parseConfigMap(raw: string): ParsedConfigMap {
+  try {
+    const doc: any = yaml.load(raw);
+    if (!doc || typeof doc !== 'object') {
+      return { ok: false, dataKeys: [], error: '无法解析为 YAML 对象' };
+    }
+    const meta = doc.metadata || {};
+    const data = doc.data || {};
+    return {
+      ok: true,
+      kind: doc.kind,
+      name: meta.name,
+      namespace: meta.namespace,
+      dataKeys: Object.keys(data),
+      doc,
+    };
+  } catch (e: any) {
+    return { ok: false, dataKeys: [], error: e?.message || 'YAML 解析失败' };
+  }
+}
+
+// getDataValue returns the string value of a specific data key from a full ConfigMap YAML.
+export function getDataValue(raw: string, key: string): string {
+  const p = parseConfigMap(raw);
+  if (!p.ok || !p.doc?.data) return '';
+  const v = p.doc.data[key];
+  return typeof v === 'string' ? v : '';
+}
+
+// setDataValue replaces one data key's value in a full ConfigMap YAML and returns
+// the re-serialized (formatted) full YAML, keeping everything else intact.
+export function setDataValue(raw: string, key: string, newVal: string): string {
+  const p = parseConfigMap(raw);
+  if (!p.ok || !p.doc) return raw;
+  if (!p.doc.data) p.doc.data = {};
+  // Strip trailing whitespace on each line of the new value for clean block scalars.
+  p.doc.data[key] = newVal.indexOf('\n') === -1
+    ? newVal
+    : newVal.split('\n').map((l) => l.replace(/[ \t]+$/, '')).join('\n');
+  const cleaned = stripTrailingInStrings(p.doc);
+  return yaml.dump(cleaned, { lineWidth: -1, noRefs: true });
+}
+
 // Recursively strip trailing spaces/tabs from each line of every string value.
 function stripTrailingInStrings(node: any): any {
   if (typeof node === 'string') {

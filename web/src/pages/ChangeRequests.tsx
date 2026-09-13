@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
-import { Tabs, Select, Input, Button, Space, Tag, Table, Modal, message, Card, Form } from 'antd';
+import { Tabs, Select, Input, Button, Space, Tag, Table, Modal, message, Card, Form, Radio } from 'antd';
 import { EditOutlined } from '@ant-design/icons';
 import ReactDiffViewer from 'react-diff-viewer-continued';
 import { api } from '../api/client';
 import type { SyncTask, ChangeRequest } from '../api/client';
 import { buildEnvOptions } from '../utils/taskEnv';
 import { diffRenderContent } from '../utils/trailingSpace';
-import { formatYaml } from '../utils/yamlFormat';
+import { formatYaml, parseConfigMap, getDataValue, setDataValue } from '../utils/yamlFormat';
+import YamlEditor from '../components/YamlEditor';
 
 const statusMeta: Record<string, { color: string; label: string }> = {
   pending: { color: 'orange', label: '待审核' },
@@ -20,15 +21,18 @@ function SubmitChange({ onSubmitted }: { onSubmitted: () => void }) {
   const [tasks, setTasks] = useState<SyncTask[]>([]);
   const [taskId, setTaskId] = useState<string>('');
   const [configMaps, setConfigMaps] = useState<{ namespace: string; name: string; path: string }[]>([]);
-  const [selected, setSelected] = useState<string>(''); // "namespace/name"
-  const [content, setContent] = useState<string>('');   // current (saved) content — formatted
+  const [selected, setSelected] = useState<string>(''); // "namespace|name"
+  const [content, setContent] = useState<string>('');   // current (saved) FULL ConfigMap YAML — formatted
   const [original, setOriginal] = useState<string>(''); // formatted baseline (for change detection)
   const [rawContent, setRawContent] = useState<string>(''); // untouched GitLab raw content
   const [baseVersion, setBaseVersion] = useState<string>(''); // hash captured at load (optimistic lock)
   const [reason, setReason] = useState<string>('');
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState<string>('');        // working copy while editing
+  const [draft, setDraft] = useState<string>('');        // working copy while editing (current view)
   const [showRaw, setShowRaw] = useState(false);          // toggle: view formatted vs original raw
+  const [viewMode, setViewMode] = useState<'full' | 'file'>('full'); // full ConfigMap vs single data file
+  const [fileKeys, setFileKeys] = useState<string[]>([]); // data keys of the ConfigMap
+  const [fileKey, setFileKey] = useState<string>('');     // selected data key
   const [loadingCM, setLoadingCM] = useState(false);
   const [loadingFile, setLoadingFile] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -37,14 +41,15 @@ function SubmitChange({ onSubmitted }: { onSubmitted: () => void }) {
     api.getTasks().then(res => setTasks(res.data || [])).catch(() => {});
   }, []);
 
+  const resetContentState = () => {
+    setContent(''); setOriginal(''); setRawContent(''); setShowRaw(false);
+    setEditing(false); setDraft(''); setViewMode('full'); setFileKeys([]); setFileKey('');
+  };
+
   const onTaskChange = (v: string) => {
     setTaskId(v);
     setSelected('');
-    setContent('');
-    setOriginal('');
-    setRawContent('');
-    setShowRaw(false);
-    setEditing(false);
+    resetContentState();
     setConfigMaps([]);
     setLoadingCM(true);
     const hide = message.loading('正在加载 ConfigMap 列表...', 0);
@@ -56,49 +61,60 @@ function SubmitChange({ onSubmitted }: { onSubmitted: () => void }) {
 
   const onCMChange = (v: string) => {
     setSelected(v);
-    setContent('');
-    setOriginal('');
-    setRawContent('');
-    setShowRaw(false);
-    setEditing(false);
+    resetContentState();
     const [ns, name] = v.split('|');
     setLoadingFile(true);
     const hide = message.loading('正在加载 YAML 内容...', 0);
     api.loadChangeRequestFile(taskId, ns, name)
       .then(res => {
         const raw = res.data.content;
-        // Format for readable multi-line display; falls back to raw if unparseable.
         const { text: formatted, ok } = formatYaml(raw);
         const display = ok ? formatted : raw;
         setRawContent(raw);
         setContent(display);
         setOriginal(display);
         setBaseVersion(res.data.baseVersion || '');
+        const parsed = parseConfigMap(display);
+        setFileKeys(parsed.dataKeys);
+        setFileKey(parsed.dataKeys[0] || '');
       })
       .catch((e: any) => message.error(e.message || '加载失败'))
       .finally(() => { hide(); setLoadingFile(false); });
   };
 
-  const startEdit = () => { setDraft(content); setEditing(true); };
+  // The text shown in the editor for the current view/mode.
+  const displayedText = (): string => {
+    if (showRaw) return rawContent;
+    if (viewMode === 'file') return getDataValue(content, fileKey);
+    return content;
+  };
+
+  const startEdit = () => { setDraft(displayedText()); setEditing(true); };
   const cancelEdit = () => { setEditing(false); setDraft(''); };
   const saveEdit = () => {
     if (!draft.trim()) { message.warning('内容不能为空'); return; }
-    setContent(draft);
+    let newFull: string;
+    if (viewMode === 'file') {
+      if (!fileKey) { message.warning('请先选择文件'); return; }
+      newFull = setDataValue(content, fileKey, draft);
+    } else {
+      newFull = draft;
+    }
+    setContent(newFull);
     setEditing(false);
-    if (draft === original) {
+    if (newFull === original) {
       message.info('内容与原始一致，未产生变更');
     } else {
       message.success('已保存修改（尚未提交审核）');
     }
   };
 
-  // Actually create the change request and reset the form.
   const doSubmit = async (ns: string, name: string) => {
     setSubmitting(true);
     try {
       await api.createChangeRequest({ taskId, namespace: ns, name, newYaml: content, reason, baseVersion });
       message.success('已提交，等待审核');
-      setSelected(''); setContent(''); setOriginal(''); setBaseVersion(''); setReason(''); setEditing(false);
+      setSelected(''); resetContentState(); setBaseVersion(''); setReason('');
       onSubmitted();
     } catch (e: any) {
       message.error(e.message || '提交失败');
@@ -116,8 +132,34 @@ function SubmitChange({ onSubmitted }: { onSubmitted: () => void }) {
     if (!reason.trim()) { message.warning('请填写变更说明'); return; }
     const [ns, name] = selected.split('|');
 
+    // Safety check: prevent accidentally changing kind/name/namespace in full-YAML edit,
+    // which would commit to the wrong GitLab file.
+    const parsed = parseConfigMap(content);
+    if (!parsed.ok) {
+      message.error('内容不是合法的 YAML，无法提交：' + (parsed.error || ''));
+      return;
+    }
+    if (parsed.kind && parsed.kind !== 'ConfigMap') {
+      message.error(`kind 必须为 ConfigMap，当前为 ${parsed.kind}`);
+      return;
+    }
+    if ((parsed.name && parsed.name !== name) || (parsed.namespace && parsed.namespace !== ns)) {
+      Modal.error({
+        title: '禁止修改资源标识',
+        content: (
+          <div>
+            <p>检测到 metadata 的 name/namespace 被改动，不允许提交（会写入错误的文件）。</p>
+            <p style={{ margin: 0 }}>
+              期望：<code>{ns}/{name}</code>，当前：<code>{parsed.namespace || '(空)'}/{parsed.name || '(空)'}</code>
+            </p>
+            <p style={{ color: '#64748b', marginTop: 8, marginBottom: 0 }}>请改回原来的 name 与 namespace 后再提交。</p>
+          </div>
+        ),
+      });
+      return;
+    }
+
     // Pre-check: does this ConfigMap already have pending change requests?
-    // If so, pop a confirm dialog so the user decides whether to proceed.
     try {
       const res = await api.listChangeRequests('pending');
       const dup = (res.data || []).filter(
@@ -183,7 +225,38 @@ function SubmitChange({ onSubmitted }: { onSubmitted: () => void }) {
       {selected && (
         <Card
           size="small"
-          title={editing ? '编辑 YAML 内容（已格式化）' : (showRaw ? 'YAML 内容（GitLab 原文，只读）' : 'YAML 内容（已格式化，只读）')}
+          title={
+            <Space wrap>
+              <span>{editing ? '编辑内容' : (showRaw ? 'GitLab 原文（只读）' : '内容（已格式化）')}</span>
+              {!showRaw && (
+                <Radio.Group
+                  size="small"
+                  value={viewMode}
+                  onChange={(e) => {
+                    if (editing) { message.warning('请先保存或取消编辑再切换视图'); return; }
+                    setViewMode(e.target.value);
+                  }}
+                  options={[
+                    { label: '完整 YAML', value: 'full' },
+                    { label: '文件内容', value: 'file' },
+                  ]}
+                  optionType="button"
+                />
+              )}
+              {!showRaw && viewMode === 'file' && fileKeys.length > 0 && (
+                <Select
+                  size="small"
+                  value={fileKey || undefined}
+                  onChange={(v) => {
+                    if (editing) { message.warning('请先保存或取消编辑再切换文件'); return; }
+                    setFileKey(v);
+                  }}
+                  style={{ minWidth: 180 }}
+                  options={fileKeys.map(k => ({ label: k, value: k }))}
+                />
+              )}
+            </Space>
+          }
           style={{ marginBottom: 12 }}
           loading={loadingFile}
           extra={
@@ -207,12 +280,13 @@ function SubmitChange({ onSubmitted }: { onSubmitted: () => void }) {
               已格式化为多行显示（去除行尾空格）。提交后 GitLab 将保存为此规整格式；点“查看原文”可对照原始内容。
             </div>
           )}
-          <Input.TextArea
-            value={editing ? draft : (showRaw ? rawContent : content)}
-            onChange={(e) => setDraft(e.target.value)}
+          {viewMode === 'file' && !showRaw && fileKeys.length === 0 && (
+            <div style={{ color: '#f59e0b', fontSize: 12, marginBottom: 6 }}>该 ConfigMap 没有 data 文件，仅可用“完整 YAML”视图。</div>
+          )}
+          <YamlEditor
+            value={editing ? draft : displayedText()}
+            onChange={setDraft}
             readOnly={!editing}
-            autoSize={{ minRows: 16, maxRows: 36 }}
-            style={{ fontFamily: 'monospace', fontSize: 13, background: editing ? undefined : '#f8fafc' }}
           />
         </Card>
       )}
