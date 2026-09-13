@@ -20,6 +20,12 @@ func (s *Server) handleCompare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Compare is read-only against GitLab, but still requires view permission on
+	// the task so users can't inspect repos/paths they aren't authorized for.
+	if !s.checkTaskAccess(w, r, taskID, "view") {
+		return
+	}
+
 	task, err := s.taskStore.Get(taskID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "任务不存在")
@@ -77,6 +83,10 @@ func (s *Server) handleListCommits(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !s.checkTaskAccess(w, r, taskID, "view") {
+		return
+	}
+
 	task, err := s.taskStore.Get(taskID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "任务不存在")
@@ -127,6 +137,10 @@ func (s *Server) handleCompareByCommit(w http.ResponseWriter, r *http.Request) {
 
 	if taskID == "" || from == "" || to == "" {
 		writeError(w, http.StatusBadRequest, "taskId, from, to 参数必填")
+		return
+	}
+
+	if !s.checkTaskAccess(w, r, taskID, "view") {
 		return
 	}
 
