@@ -230,7 +230,17 @@ function SubmitChange({ onSubmitted }: { onSubmitted: () => void }) {
           size="small"
           title={
             <Space wrap size={12}>
-              <span style={{ fontWeight: 600 }}>
+              <span
+                style={{
+                  fontWeight: 700,
+                  fontSize: 14,
+                  padding: '4px 12px',
+                  borderRadius: 6,
+                  color: '#fff',
+                  background: editing ? '#f59e0b' : (showRaw ? '#64748b' : '#2563eb'),
+                  boxShadow: '0 2px 4px rgba(0,0,0,0.15)',
+                }}
+              >
                 {editing ? '编辑内容' : (showRaw ? 'GitLab 原文（只读）' : (isFormatted ? '内容（已格式化）' : '内容'))}
               </span>
               {!showRaw && (
@@ -241,11 +251,18 @@ function SubmitChange({ onSubmitted }: { onSubmitted: () => void }) {
                     if (editing) { message.warning('请先保存或取消编辑再切换视图'); return; }
                     setViewMode(v as 'full' | 'file');
                   }}
+                  style={{
+                    padding: 4,
+                    background: '#f1f5f9',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: 8,
+                    boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.08)',
+                  }}
                   options={[
                     {
                       value: 'full',
                       label: (
-                        <span style={{ color: viewMode === 'full' ? '#2563eb' : '#64748b', fontWeight: viewMode === 'full' ? 600 : 400 }}>
+                        <span style={{ color: viewMode === 'full' ? '#2563eb' : '#64748b', fontWeight: viewMode === 'full' ? 700 : 500 }}>
                           <CodeOutlined /> 完整 YAML
                         </span>
                       ),
@@ -253,7 +270,7 @@ function SubmitChange({ onSubmitted }: { onSubmitted: () => void }) {
                     {
                       value: 'file',
                       label: (
-                        <span style={{ color: viewMode === 'file' ? '#16a34a' : '#64748b', fontWeight: viewMode === 'file' ? 600 : 400 }}>
+                        <span style={{ color: viewMode === 'file' ? '#16a34a' : '#64748b', fontWeight: viewMode === 'file' ? 700 : 500 }}>
                           <FileTextOutlined /> 文件内容
                         </span>
                       ),
