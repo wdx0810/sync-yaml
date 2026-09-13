@@ -85,7 +85,7 @@ function AppContent({ username, onLogout }: { username: string; onLogout: () => 
           selectedKeys={[selectedKey]}
           items={[
             { key: 'dashboard', icon: <DashboardOutlined />, label: <Link to="/dashboard">仪表盘</Link> },
-            { key: 'connections', icon: <DatabaseOutlined />, label: <Link to="/connections">数据源</Link> },
+            ...(role === 'admin' ? [{ key: 'connections', icon: <DatabaseOutlined />, label: <Link to="/connections">数据源</Link> }] : []),
             { key: 'tasks', icon: <SyncOutlined />, label: <Link to="/tasks">同步任务</Link> },
             { key: 'change-requests', icon: <EditOutlined />, label: <Link to="/change-requests">配置变更</Link> },
             { key: 'history', icon: <HistoryOutlined />, label: <Link to="/history">同步历史</Link> },
@@ -118,7 +118,7 @@ function AppContent({ username, onLogout }: { username: string; onLogout: () => 
           <Routes>
             <Route path="/" element={<Navigate to="/dashboard" replace />} />
             <Route path="/dashboard" element={<Dashboard />} />
-            <Route path="/connections" element={<Connections />} />
+            {role === 'admin' && <Route path="/connections" element={<Connections />} />}
             <Route path="/tasks" element={<Tasks />} />
             <Route path="/history" element={<SyncHistory />} />
             <Route path="/compare" element={<CompareChanges />} />

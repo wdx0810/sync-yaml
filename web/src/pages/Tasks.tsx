@@ -330,7 +330,9 @@ export default function Tasks() {
           onChange={(e) => setNameFilter(e.target.value)}
           style={{ width: 200 }}
         />
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditingTask(null); form.resetFields(); setModalOpen(true); }}>创建同步任务</Button>
+        {(localStorage.getItem('role') === 'admin') && (
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditingTask(null); form.resetFields(); setModalOpen(true); }}>创建同步任务</Button>
+        )}
       </Space>
       <Table columns={columns} dataSource={filteredTasks} rowKey="id" loading={loading} size="small" scroll={{ x: 900 }} />
       <Modal title={editingTask ? '编辑同步任务' : '创建同步任务'} open={modalOpen} onCancel={() => { setModalOpen(false); setEditingTask(null); setDirection('forward'); }} onOk={() => form.submit()} okText={editingTask ? '保存' : '创建'} width={520}>

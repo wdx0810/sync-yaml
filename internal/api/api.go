@@ -145,40 +145,42 @@ func (s *Server) registerRoutes() {
 	api.HandleFunc("/users/{username}/api-token", s.requireAdmin(s.handleDeleteUserAPIToken)).Methods("DELETE")
 
 	// Existing endpoints.
-	api.HandleFunc("/configmaps", s.listConfigMaps).Methods("GET")
-	api.HandleFunc("/configmaps/{namespace}/{name}", s.getConfigMapDetail).Methods("GET")
-	api.HandleFunc("/forward-sync", s.forwardSync).Methods("POST")
-	api.HandleFunc("/forward-sync/{namespace}/{name}", s.forwardSyncOne).Methods("POST")
-	api.HandleFunc("/reverse-sync/{namespace}/{name}", s.reverseSync).Methods("POST")
+	// Legacy global ConfigMap/sync endpoints (not used by current UI) — admin only.
+	api.HandleFunc("/configmaps", s.requireAdmin(s.listConfigMaps)).Methods("GET")
+	api.HandleFunc("/configmaps/{namespace}/{name}", s.requireAdmin(s.getConfigMapDetail)).Methods("GET")
+	api.HandleFunc("/forward-sync", s.requireAdmin(s.forwardSync)).Methods("POST")
+	api.HandleFunc("/forward-sync/{namespace}/{name}", s.requireAdmin(s.forwardSyncOne)).Methods("POST")
+	api.HandleFunc("/reverse-sync/{namespace}/{name}", s.requireAdmin(s.reverseSync)).Methods("POST")
 	api.HandleFunc("/drift-alerts", s.getDriftAlerts).Methods("GET")
-	api.HandleFunc("/drift-alerts/{id}/dismiss", s.dismissAlert).Methods("POST")
+	api.HandleFunc("/drift-alerts/{id}/dismiss", s.requireAdmin(s.dismissAlert)).Methods("POST")
 	api.HandleFunc("/history", s.getHistory).Methods("GET")
 	api.HandleFunc("/history/{id}", s.getHistoryRecord).Methods("GET")
 	api.HandleFunc("/compare", s.handleCompare).Methods("GET")
 	api.HandleFunc("/compare/commits", s.handleListCommits).Methods("GET")
 	api.HandleFunc("/compare/by-commit", s.handleCompareByCommit).Methods("GET")
-	api.HandleFunc("/check-gitlab", s.checkGitLab).Methods("POST")
+	api.HandleFunc("/check-gitlab", s.requireAdmin(s.checkGitLab)).Methods("POST")
 	api.HandleFunc("/status", s.getStatus).Methods("GET")
 
-	// Sources endpoints.
+	// Sources endpoints. List is readable by any logged-in user (masked);
+	// create/update/delete/test require admin (they touch tokens/config).
 	api.HandleFunc("/sources", s.listSources).Methods("GET")
-	api.HandleFunc("/sources", s.createSource).Methods("POST")
-	api.HandleFunc("/sources/{name}", s.updateSource).Methods("PUT")
-	api.HandleFunc("/sources/{name}", s.deleteSource).Methods("DELETE")
-	api.HandleFunc("/sources/{name}/test", s.testSource).Methods("POST")
+	api.HandleFunc("/sources", s.requireAdmin(s.createSource)).Methods("POST")
+	api.HandleFunc("/sources/{name}", s.requireAdmin(s.updateSource)).Methods("PUT")
+	api.HandleFunc("/sources/{name}", s.requireAdmin(s.deleteSource)).Methods("DELETE")
+	api.HandleFunc("/sources/{name}/test", s.requireAdmin(s.testSource)).Methods("POST")
 
-	// Targets endpoints.
+	// Targets endpoints. Same policy as sources.
 	api.HandleFunc("/targets", s.listTargets).Methods("GET")
-	api.HandleFunc("/targets", s.createTarget).Methods("POST")
-	api.HandleFunc("/targets/{name}", s.updateTarget).Methods("PUT")
-	api.HandleFunc("/targets/{name}", s.deleteTarget).Methods("DELETE")
-	api.HandleFunc("/targets/{name}/test", s.testTarget).Methods("POST")
+	api.HandleFunc("/targets", s.requireAdmin(s.createTarget)).Methods("POST")
+	api.HandleFunc("/targets/{name}", s.requireAdmin(s.updateTarget)).Methods("PUT")
+	api.HandleFunc("/targets/{name}", s.requireAdmin(s.deleteTarget)).Methods("DELETE")
+	api.HandleFunc("/targets/{name}/test", s.requireAdmin(s.testTarget)).Methods("POST")
 
-	// Notify channels endpoints.
+	// Notify channels endpoints. List readable; write requires admin.
 	api.HandleFunc("/notify-channels", s.listNotifyChannels).Methods("GET")
-	api.HandleFunc("/notify-channels", s.createNotifyChannel).Methods("POST")
-	api.HandleFunc("/notify-channels/{name}", s.updateNotifyChannel).Methods("PUT")
-	api.HandleFunc("/notify-channels/{name}", s.deleteNotifyChannel).Methods("DELETE")
+	api.HandleFunc("/notify-channels", s.requireAdmin(s.createNotifyChannel)).Methods("POST")
+	api.HandleFunc("/notify-channels/{name}", s.requireAdmin(s.updateNotifyChannel)).Methods("PUT")
+	api.HandleFunc("/notify-channels/{name}", s.requireAdmin(s.deleteNotifyChannel)).Methods("DELETE")
 
 	// MFA management endpoints (protected).
 	api.HandleFunc("/auth/mfa/status", s.handleMFAStatus).Methods("GET")
@@ -188,7 +190,7 @@ func (s *Server) registerRoutes() {
 
 	// Tasks endpoints.
 	api.HandleFunc("/tasks", s.listTasks).Methods("GET")
-	api.HandleFunc("/tasks", s.createTask).Methods("POST")
+	api.HandleFunc("/tasks", s.requireAdmin(s.createTask)).Methods("POST")
 	api.HandleFunc("/tasks/{id}", s.updateTask).Methods("PUT")
 	api.HandleFunc("/tasks/{id}", s.deleteTask).Methods("DELETE")
 	api.HandleFunc("/tasks/{id}/start", s.startTask).Methods("POST")
