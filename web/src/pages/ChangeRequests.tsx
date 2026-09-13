@@ -242,8 +242,22 @@ function SubmitChange({ onSubmitted }: { onSubmitted: () => void }) {
                     setViewMode(v as 'full' | 'file');
                   }}
                   options={[
-                    { label: '完整 YAML', value: 'full', icon: <CodeOutlined /> },
-                    { label: '文件内容', value: 'file', icon: <FileTextOutlined /> },
+                    {
+                      value: 'full',
+                      label: (
+                        <span style={{ color: viewMode === 'full' ? '#2563eb' : '#64748b', fontWeight: viewMode === 'full' ? 600 : 400 }}>
+                          <CodeOutlined /> 完整 YAML
+                        </span>
+                      ),
+                    },
+                    {
+                      value: 'file',
+                      label: (
+                        <span style={{ color: viewMode === 'file' ? '#16a34a' : '#64748b', fontWeight: viewMode === 'file' ? 600 : 400 }}>
+                          <FileTextOutlined /> 文件内容
+                        </span>
+                      ),
+                    },
                   ]}
                 />
               )}
@@ -310,7 +324,7 @@ function SubmitChange({ onSubmitted }: { onSubmitted: () => void }) {
           <Form.Item label="变更说明" required>
             <Input.TextArea value={reason} onChange={(e) => setReason(e.target.value)} rows={2} placeholder="请说明本次修改的目的" />
           </Form.Item>
-          <Button type="primary" size="large" loading={submitting} disabled={editing || !changed} onClick={handleSubmit}>提交审核</Button>
+          <Button type="primary" size="large" loading={submitting} disabled={editing || !changed} onClick={handleSubmit} style={{ color: '#fff' }}>提交审核</Button>
           {editing && <span style={{ marginLeft: 12, color: '#f59e0b' }}>请先保存或取消编辑</span>}
         </Form>
       )}
