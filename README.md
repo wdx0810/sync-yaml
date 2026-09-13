@@ -7,10 +7,23 @@ GitLab 与 Kubernetes 之间的双向 YAML 同步工具。把 GitOps 的"声明�
 ### 同步能力
 - **正向同步（GitLab → K8s）**：递归扫描 GitLab 仓库目录下的所有 `.yaml/.yml`，通过 K8s Server-Side Apply 应用到目标集群
 - **反向同步（K8s → GitLab）**：列出 K8s 集群资源，清理掉运行时字段后写回 GitLab，**单次同步只产生一个 commit**
-- **审核流程**：正向同步前展示所有待变更资源的 YAML diff，用户逐项勾选后才真正应用
+- **审核流程**：正向同步前展示所有待变更资源的 YAML diff，用户逐项勾选后才真正应用；应用完成弹出结果窗口（统计 + 已同步/失败清单 + 错误详情）
+- **语义比较一致性**：正反向同步统一使用 JSON 归一化语义比较（忽略字段顺序、格式、K8s 默认值、数字类型差异），避免往返产生"假变更"
 - **多资源类型**：ConfigMap、Secret、Deployment、StatefulSet、DaemonSet、Service、Ingress、Job、CronJob、PVC、RBAC 等都支持
 - **多命名空间**：单个任务可同时同步多个命名空间，逗号分隔
-- **三种触发模式**：手动、定时（cron 间隔）、自动（监听 K8s Watch 事件）
+- **三种触发模式**：手动、定时（cron 间隔）、自动（监听 K8s Watch 事件，带 5 秒防抖）
+- **名称过滤**：按资源名称做包含/排除正则过滤，系统资源自动跳过
+
+### 配置变更（编辑 → 审核 → 提交 GitLab）
+- 开发人员在线编辑 ConfigMap（默认只读，点"编辑"才可改，"保存修改"暂存），提交审核后由有编辑权限者批准写入 GitLab；只改 GitLab，不动 K8s
+- **多人并发（乐观锁）**：加载时记录版本基线，审批提交前校验 GitLab 当前版本，冲突则拒绝并标记"已失效"，展示基线 vs 最新 diff 供重做
+- 审核列表支持按 状态 / 环境 / 申请人 / ConfigMap 名称 组合筛选
+
+### 变更对比
+- 查看 GitLab 仓库 YAML 在指定时间段或两次 commit 之间的差异，支持按资源类型筛选、导出为文本文件
+
+### 通知
+- 飞书机器人多渠道，任务可绑定渠道，反向同步有变更时推送卡片通知
 
 ### 用户与权限
 - 多用户管理（管理员 / 普通用户）
@@ -100,7 +113,9 @@ kubectl apply -f deploy/k8s.yaml
 | `sources.json` | GitLab 数据源（token 加密） |
 | `targets.json` | K8s 集群目标（kubeconfig 加密） |
 | `sync_tasks.json` | 同步任务定义 |
-| `encryption.key` | 用于加解密上面三类敏感字段的密钥 |
+| `notify_channels.json` | 飞书通知渠道 |
+| `change_requests.json` | 配置变更申请记录 |
+| `encryption.key` | 用于加解密上面几类敏感字段的密钥 |
 | `history.jsonl` | 同步历史记录（追加写） |
 
 ## 权限模型
@@ -128,6 +143,12 @@ GET    /api/v1/tasks                 同步任务列表
 POST   /api/v1/tasks/{id}/preview    正向同步预览（返回变更列表）
 POST   /api/v1/tasks/{id}/apply      应用已批准的变更
 POST   /api/v1/tasks/{id}/sync       直接同步（反向同步直接执行）
+GET    /api/v1/compare               变更对比（按时间段）
+GET    /api/v1/compare/by-commit     变更对比（按 commit）
+GET    /api/v1/change-requests       配置变更申请列表
+POST   /api/v1/change-requests       提交配置变更申请
+POST   /api/v1/change-requests/{id}/approve  批准并提交 GitLab
+POST   /api/v1/change-requests/{id}/reject   驳回申请
 GET    /api/v1/users                 用户管理（admin 专属）
 PUT    /api/v1/users/{name}/permissions/{taskId}        设置任务权限
 PUT    /api/v1/users/{name}/project-permissions/{proj}  设置项目权限
