@@ -3,6 +3,7 @@ import { Table, Input, Select, DatePicker, Space, Tag, Collapse } from 'antd';
 import ReactDiffViewer from 'react-diff-viewer-continued';
 import { api } from '../api/client';
 import type { SyncRecord, HistoryFilter } from '../api/client';
+import { diffRenderContent } from '../utils/trailingSpace';
 import ErrorAlert from '../components/ErrorAlert';
 
 const { RangePicker } = DatePicker;
@@ -95,6 +96,7 @@ export default function SyncHistory() {
                 leftTitle={d.action === 'created' ? '(新建)' : '变更前'}
                 rightTitle="变更后"
                 useDarkTheme={false}
+                renderContent={diffRenderContent}
               />
             ) : d.changes?.length > 0 ? (
               <div>

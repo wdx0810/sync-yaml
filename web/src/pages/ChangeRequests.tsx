@@ -5,6 +5,7 @@ import ReactDiffViewer from 'react-diff-viewer-continued';
 import { api } from '../api/client';
 import type { SyncTask, ChangeRequest } from '../api/client';
 import { buildEnvOptions } from '../utils/taskEnv';
+import { diffRenderContent } from '../utils/trailingSpace';
 
 const statusMeta: Record<string, { color: string; label: string }> = {
   pending: { color: 'orange', label: '待审核' },
@@ -193,7 +194,7 @@ function SubmitChange({ onSubmitted }: { onSubmitted: () => void }) {
       {changed && !editing && (
         <Card size="small" title="变更预览（左：当前 GitLab 内容，右：修改后）" style={{ marginBottom: 12 }}>
           <div style={{ maxHeight: 400, overflow: 'auto' }}>
-            <ReactDiffViewer oldValue={original} newValue={content} splitView leftTitle="当前" rightTitle="修改后" useDarkTheme={false} />
+            <ReactDiffViewer oldValue={original} newValue={content} splitView leftTitle="当前" rightTitle="修改后" useDarkTheme={false} renderContent={diffRenderContent} />
           </div>
         </Card>
       )}
@@ -430,16 +431,16 @@ function ReviewList({ refreshKey }: { refreshKey: number }) {
               <>
                 <p style={{ marginBottom: 4 }}><b>基线 vs GitLab 最新（他人已合入的变更）：</b></p>
                 <div style={{ maxHeight: 300, overflow: 'auto', border: '1px solid #eee', borderRadius: 6, marginBottom: 12 }}>
-                  <ReactDiffViewer oldValue={detail.oldYaml} newValue={detail.conflictYaml || ''} splitView leftTitle="申请时基线" rightTitle="GitLab 最新" useDarkTheme={false} />
+                  <ReactDiffViewer oldValue={detail.oldYaml} newValue={detail.conflictYaml || ''} splitView leftTitle="申请时基线" rightTitle="GitLab 最新" useDarkTheme={false} renderContent={diffRenderContent} />
                 </div>
                 <p style={{ marginBottom: 4 }}><b>本申请原本的修改（基线 → 申请修改后）：</b></p>
                 <div style={{ maxHeight: 300, overflow: 'auto', border: '1px solid #eee', borderRadius: 6 }}>
-                  <ReactDiffViewer oldValue={detail.oldYaml} newValue={detail.newYaml} splitView leftTitle="申请时基线" rightTitle="申请修改后" useDarkTheme={false} />
+                  <ReactDiffViewer oldValue={detail.oldYaml} newValue={detail.newYaml} splitView leftTitle="申请时基线" rightTitle="申请修改后" useDarkTheme={false} renderContent={diffRenderContent} />
                 </div>
               </>
             ) : (
               <div style={{ maxHeight: 420, overflow: 'auto', border: '1px solid #eee', borderRadius: 6 }}>
-                <ReactDiffViewer oldValue={detail.oldYaml} newValue={detail.newYaml} splitView leftTitle="当前 GitLab" rightTitle="申请修改后" useDarkTheme={false} />
+                <ReactDiffViewer oldValue={detail.oldYaml} newValue={detail.newYaml} splitView leftTitle="当前 GitLab" rightTitle="申请修改后" useDarkTheme={false} renderContent={diffRenderContent} />
               </div>
             )}
             {detail.status === 'pending' && (

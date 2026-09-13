@@ -4,6 +4,7 @@ import { SearchOutlined } from '@ant-design/icons';
 import { api } from '../api/client';
 import type { SyncTask } from '../api/client';
 import { buildEnvOptions } from '../utils/taskEnv';
+import { renderTextWithTrailing } from '../utils/trailingSpace';
 
 const { RangePicker } = DatePicker;
 
@@ -199,7 +200,7 @@ function CompareSection() {
             ),
             children: (
               <pre style={{ maxHeight: 400, overflow: 'auto', background: '#f8fafc', padding: 12, fontSize: 12, borderRadius: 6 }}>
-                {d.diff || '(无内容差异)'}
+                {d.diff ? renderTextWithTrailing(d.diff) : '(无内容差异)'}
               </pre>
             ),
           }))}
