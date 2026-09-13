@@ -196,6 +196,9 @@ function SubmitChange({ onSubmitted }: { onSubmitted: () => void }) {
   };
 
   const changed = content !== original && original !== '';
+  // True only when the loaded content was actually reformatted (had multi-line
+  // values squashed into escaped strings). Normal files load unchanged.
+  const isFormatted = !!rawContent && original !== rawContent;
 
   return (
     <div>
@@ -226,10 +229,13 @@ function SubmitChange({ onSubmitted }: { onSubmitted: () => void }) {
         <Card
           size="small"
           title={
-            <Space wrap>
-              <span>{editing ? '编辑内容' : (showRaw ? 'GitLab 原文（只读）' : '内容（已格式化）')}</span>
+            <Space wrap size={12}>
+              <span style={{ fontWeight: 600 }}>
+                {editing ? '编辑内容' : (showRaw ? 'GitLab 原文（只读）' : (isFormatted ? '内容（已格式化）' : '内容'))}
+              </span>
               {!showRaw && (
                 <Segmented
+                  size="large"
                   value={viewMode}
                   onChange={(v) => {
                     if (editing) { message.warning('请先保存或取消编辑再切换视图'); return; }
@@ -243,36 +249,39 @@ function SubmitChange({ onSubmitted }: { onSubmitted: () => void }) {
               )}
               {!showRaw && viewMode === 'file' && fileKeys.length > 0 && (
                 <Select
+                  size="large"
                   value={fileKey || undefined}
                   onChange={(v) => {
                     if (editing) { message.warning('请先保存或取消编辑再切换文件'); return; }
                     setFileKey(v);
                   }}
-                  style={{ minWidth: 200 }}
+                  style={{ minWidth: 220 }}
                   options={fileKeys.map(k => ({ label: k, value: k }))}
                 />
               )}
             </Space>
           }
-          style={{ marginBottom: 12, boxShadow: '0 1px 4px rgba(0,0,0,0.08)' }}
+          style={{ marginBottom: 12, boxShadow: '0 2px 8px rgba(0,0,0,0.10)', borderRadius: 8 }}
           loading={loadingFile}
           extra={
             editing ? (
               <Space>
-                <Button icon={<CloseOutlined />} onClick={cancelEdit}>取消</Button>
-                <Button type="primary" icon={<SaveOutlined />} onClick={saveEdit}>保存修改</Button>
+                <Button size="large" icon={<CloseOutlined />} onClick={cancelEdit}>取消</Button>
+                <Button size="large" type="primary" icon={<SaveOutlined />} onClick={saveEdit}>保存修改</Button>
               </Space>
             ) : (
               <Space>
-                <Button icon={<EyeOutlined />} onClick={() => setShowRaw(s => !s)}>
-                  {showRaw ? '查看格式化' : '查看原文'}
-                </Button>
-                <Button type="primary" ghost icon={<EditOutlined />} onClick={startEdit}>编辑</Button>
+                {isFormatted && (
+                  <Button size="large" icon={<EyeOutlined />} onClick={() => setShowRaw(s => !s)}>
+                    {showRaw ? '查看格式化' : '查看原文'}
+                  </Button>
+                )}
+                <Button size="large" type="primary" icon={<EditOutlined />} onClick={startEdit}>编辑</Button>
               </Space>
             )
           }
         >
-          {!editing && rawContent && content !== rawContent && !showRaw && (
+          {!editing && isFormatted && !showRaw && (
             <div style={{ color: '#64748b', fontSize: 12, marginBottom: 6 }}>
               已格式化为多行显示（去除行尾空格）。提交后 GitLab 将保存为此规整格式；点“查看原文”可对照原始内容。
             </div>
@@ -560,8 +569,8 @@ export default function ChangeRequests() {
   const [refreshKey, setRefreshKey] = useState(0);
   return (
     <div>
-      <h2>配置变更</h2>
-      <p style={{ color: '#64748b', marginTop: -8 }}>
+      <h2 style={{ marginBottom: 4 }}>配置变更</h2>
+      <p style={{ color: '#64748b', marginTop: 0, marginBottom: 16 }}>
         编辑 ConfigMap 并提交审核，批准后将提交到 GitLab。如需下发到 K8s，请使用对应的同步任务。
       </p>
       <Tabs
