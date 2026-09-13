@@ -216,6 +216,9 @@ function ReviewList({ refreshKey }: { refreshKey: number }) {
   const [requests, setRequests] = useState<ChangeRequest[]>([]);
   const [loading, setLoading] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string>('');
+  const [nameFilter, setNameFilter] = useState<string>('');
+  const [taskFilter, setTaskFilter] = useState<string>('');
+  const [requesterFilter, setRequesterFilter] = useState<string>('');
   const [detail, setDetail] = useState<ChangeRequest | null>(null);
   const [note, setNote] = useState('');
   const [acting, setActing] = useState(false);
@@ -299,6 +302,20 @@ function ReviewList({ refreshKey }: { refreshKey: number }) {
     if (r.status === 'pending') pendingCountByFile[r.filePath] = (pendingCountByFile[r.filePath] || 0) + 1;
   }
 
+  // Distinct values for the task and requester dropdowns.
+  const taskOptions = Array.from(new Set(requests.map(r => r.taskName))).sort()
+    .map(t => ({ label: t, value: t }));
+  const requesterOptions = Array.from(new Set(requests.map(r => r.requester))).sort()
+    .map(u => ({ label: u, value: u }));
+
+  // Client-side combined filter: environment(task) + ConfigMap name + requester.
+  const filteredRequests = requests.filter(r => {
+    if (taskFilter && r.taskName !== taskFilter) return false;
+    if (requesterFilter && r.requester !== requesterFilter) return false;
+    if (nameFilter.trim() && !`${r.namespace}/${r.name}`.toLowerCase().includes(nameFilter.trim().toLowerCase())) return false;
+    return true;
+  });
+
   const columns = [
     { title: '环境(任务)', dataIndex: 'taskName', width: 160 },
     {
@@ -332,13 +349,13 @@ function ReviewList({ refreshKey }: { refreshKey: number }) {
 
   return (
     <div>
-      <Space style={{ marginBottom: 12 }}>
+      <Space style={{ marginBottom: 12 }} wrap>
         <Select
           placeholder="全部状态"
           allowClear
           value={statusFilter || undefined}
           onChange={(v) => setStatusFilter(v || '')}
-          style={{ width: 160 }}
+          style={{ width: 150 }}
           options={[
             { label: '待审核', value: 'pending' },
             { label: '已批准', value: 'approved' },
@@ -346,9 +363,36 @@ function ReviewList({ refreshKey }: { refreshKey: number }) {
             { label: '已失效(冲突)', value: 'conflict' },
           ]}
         />
+        <Select
+          placeholder="按环境(任务)筛选"
+          allowClear
+          showSearch
+          optionFilterProp="label"
+          value={taskFilter || undefined}
+          onChange={(v) => setTaskFilter(v || '')}
+          style={{ width: 200 }}
+          options={taskOptions}
+        />
+        <Select
+          placeholder="按申请人筛选"
+          allowClear
+          showSearch
+          optionFilterProp="label"
+          value={requesterFilter || undefined}
+          onChange={(v) => setRequesterFilter(v || '')}
+          style={{ width: 160 }}
+          options={requesterOptions}
+        />
+        <Input.Search
+          placeholder="按 ConfigMap 名称筛选"
+          allowClear
+          value={nameFilter}
+          onChange={(e) => setNameFilter(e.target.value)}
+          style={{ width: 240 }}
+        />
         <Button onClick={fetchData}>刷新</Button>
       </Space>
-      <Table columns={columns} dataSource={requests} rowKey="id" loading={loading} size="small" />
+      <Table columns={columns} dataSource={filteredRequests} rowKey="id" loading={loading} size="small" />
 
       <Modal
         open={!!detail}
