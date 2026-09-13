@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Form, Input, Button, message } from 'antd';
+import { useEffect, useState } from 'react';
+import { Form, Input, Button, message, Divider } from 'antd';
 import { UserOutlined, LockOutlined, SafetyOutlined } from '@ant-design/icons';
 import axios from 'axios';
 
@@ -11,6 +11,38 @@ export default function Login({ onLogin }: Props) {
   const [loading, setLoading] = useState(false);
   const [mfaStep, setMfaStep] = useState(false);
   const [mfaUsername, setMfaUsername] = useState('');
+  const [feishuEnabled, setFeishuEnabled] = useState(false);
+
+  // Check whether Feishu login is enabled, and handle the Feishu callback redirect.
+  useEffect(() => {
+    axios.get('/api/v1/auth/feishu/status')
+      .then(res => setFeishuEnabled(!!res.data?.enabled))
+      .catch(() => {});
+
+    // The backend redirects to /login/feishu-callback?token=...&username=... on success,
+    // or ?error=... on failure.
+    if (window.location.pathname.includes('/login/feishu-callback')) {
+      const params = new URLSearchParams(window.location.search);
+      const err = params.get('error');
+      const token = params.get('token');
+      const username = params.get('username');
+      // Clean the URL.
+      window.history.replaceState({}, '', '/');
+      if (err) {
+        message.error('飞书登录失败: ' + err);
+      } else if (token && username) {
+        localStorage.setItem('token', token);
+        localStorage.setItem('username', username);
+        localStorage.removeItem('role'); // will be fetched on load
+        onLogin(token, username);
+      }
+    }
+  }, [onLogin]);
+
+  const handleFeishuLogin = () => {
+    // Full-page navigation to the backend, which redirects to Feishu.
+    window.location.href = '/api/v1/auth/feishu/login';
+  };
 
   const handleSubmit = async (values: { username: string; password: string }) => {
     setLoading(true);
@@ -141,6 +173,18 @@ export default function Login({ onLogin }: Props) {
               </Form.Item>
             </Form>
             <div style={{ color: '#94a3b8', textAlign: 'center', fontSize: 12 }}>默认账号: admin / admin123</div>
+            {feishuEnabled && (
+              <>
+                <Divider style={{ margin: '20px 0 16px', color: '#94a3b8', fontSize: 12 }}>或</Divider>
+                <Button
+                  block
+                  onClick={handleFeishuLogin}
+                  style={{ height: 44, borderRadius: 10, fontSize: 15, fontWeight: 600, borderColor: '#3370ff', color: '#3370ff' }}
+                >
+                  飞书扫码登录
+                </Button>
+              </>
+            )}
           </>
         ) : (
           <>

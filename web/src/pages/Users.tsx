@@ -376,6 +376,9 @@ export default function Users() {
           >
             <Input.Password placeholder="至少 6 位" />
           </Form.Item>
+          <Form.Item name="email" label="邮箱" tooltip="用于飞书身份匹配和飞书通知（可选）">
+            <Input placeholder="user@company.com（用于飞书登录匹配/通知）" />
+          </Form.Item>
           <Form.Item name="role" label="角色" rules={[{ required: true }]}>
             <Select options={[
               { label: '普通用户', value: 'user' },

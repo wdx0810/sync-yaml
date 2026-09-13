@@ -78,6 +78,9 @@ func main() {
 	// Initialize change request store (independent ConfigMap edit → approve → commit module).
 	changeReqStore := store.NewChangeRequestStore(storagePath)
 
+	// Initialize Feishu integration config store.
+	feishuStore := store.NewFeishuStore(storagePath, cryptoSvc)
+
 	// Initialize task manager.
 	taskMgr := engine.NewTaskManager(sourceStore, targetStore, taskStoreRef, historyStore, notifyStore)
 
@@ -92,6 +95,7 @@ func main() {
 		UserStore:   userStore,
 		NotifyStore: notifyStore,
 		ChangeRequestStore: changeReqStore,
+		FeishuStore: feishuStore,
 		StoragePath: storagePath,
 	})
 	router := apiServer.Router()

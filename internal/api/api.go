@@ -31,6 +31,7 @@ type Server struct {
 	userStore   store.UserStore
 	notifyStore store.NotifyStore
 	changeReqStore store.ChangeRequestStore
+	feishuStore store.FeishuStore
 	router      *mux.Router
 	logger      *slog.Logger
 	storagePath string
@@ -49,6 +50,7 @@ type ServerConfig struct {
 	UserStore   store.UserStore
 	NotifyStore store.NotifyStore
 	ChangeRequestStore store.ChangeRequestStore
+	FeishuStore store.FeishuStore
 	StoragePath string
 }
 
@@ -66,6 +68,7 @@ func NewServer(cfg ServerConfig) *Server {
 		userStore:   cfg.UserStore,
 		notifyStore: cfg.NotifyStore,
 		changeReqStore: cfg.ChangeRequestStore,
+		feishuStore: cfg.FeishuStore,
 		router:      mux.NewRouter(),
 		logger:      slog.Default().With("component", "api"),
 		storagePath: cfg.StoragePath,
@@ -105,10 +108,15 @@ func (s *Server) registerRoutes() {
 	// External webhook trigger (token-based auth, no login required).
 	api.HandleFunc("/hooks/sync/{id}", s.handleWebhookSync).Methods("POST")
 
+	// Feishu login (public: status/login/callback).
+	api.HandleFunc("/auth/feishu/status", s.handleFeishuStatus).Methods("GET")
+	api.HandleFunc("/auth/feishu/login", s.handleFeishuLogin).Methods("GET")
+	api.HandleFunc("/auth/feishu/callback", s.handleFeishuCallback).Methods("GET")
+
 	// Auth middleware for all other routes.
 	api.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if strings.HasSuffix(r.URL.Path, "/auth/login") || strings.HasSuffix(r.URL.Path, "/auth/check") || strings.HasSuffix(r.URL.Path, "/auth/mfa/verify") || strings.Contains(r.URL.Path, "/hooks/") {
+			if strings.HasSuffix(r.URL.Path, "/auth/login") || strings.HasSuffix(r.URL.Path, "/auth/check") || strings.HasSuffix(r.URL.Path, "/auth/mfa/verify") || strings.Contains(r.URL.Path, "/hooks/") || strings.Contains(r.URL.Path, "/auth/feishu/") {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -143,6 +151,10 @@ func (s *Server) registerRoutes() {
 	api.HandleFunc("/users/{username}/mfa-enabled", s.requireAdmin(s.handleSetUserMFAEnabledWrapper)).Methods("PUT")
 	api.HandleFunc("/users/{username}/api-token", s.requireAdmin(s.handleGenerateUserAPIToken)).Methods("POST")
 	api.HandleFunc("/users/{username}/api-token", s.requireAdmin(s.handleDeleteUserAPIToken)).Methods("DELETE")
+
+	// Feishu integration config (admin only; secret masked on read).
+	api.HandleFunc("/feishu/config", s.requireAdmin(s.handleGetFeishuConfig)).Methods("GET")
+	api.HandleFunc("/feishu/config", s.requireAdmin(s.handleSaveFeishuConfig)).Methods("POST")
 
 	// Existing endpoints.
 	// Legacy global ConfigMap/sync endpoints (not used by current UI) — admin only.

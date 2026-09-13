@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -36,6 +37,11 @@ type User struct {
 	Enabled  bool        `json:"enabled"`
 	MFA      MFASettings `json:"mfa"`
 	APIToken string      `json:"apiToken,omitempty"`
+	// Feishu (Lark) identity binding. Email is used to match/identify users;
+	// FeishuUserID/FeishuOpenID are used to send Feishu messages to this user.
+	Email        string `json:"email,omitempty"`
+	FeishuUserID string `json:"feishuUserId,omitempty"`
+	FeishuOpenID string `json:"feishuOpenId,omitempty"`
 }
 
 // TaskPermission represents a user's permission on a specific task.
@@ -88,6 +94,14 @@ type UserStore interface {
 	// CanAccessTask returns whether the user can perform an action on the task.
 	// Permissions are resolved in order: task-level → project-level.
 	CanAccessTask(username, taskID, project, action string) (bool, error)
+
+	// Feishu identity
+	// FindByEmail returns the user whose Username or Email equals the given email (case-insensitive), or nil.
+	FindByEmail(email string) (*User, error)
+	// UpsertFeishuUser binds/creates a user from Feishu login. If a user matching
+	// the email exists, its Feishu fields are updated; otherwise a new password-less
+	// user with role=user and no permissions is created. Returns the resulting user.
+	UpsertFeishuUser(email, name, feishuUserID, feishuOpenID string) (*User, error)
 }
 
 type userStore struct {
@@ -338,6 +352,13 @@ func (s *userStore) UpdateUser(username string, user *User) error {
 			}
 			// Preserve existing MFA (only SetUserMFA modifies it).
 			u.MFA = existing.MFA
+			// Preserve auto-bound Feishu identity (edit form doesn't carry these).
+			u.FeishuUserID = existing.FeishuUserID
+			u.FeishuOpenID = existing.FeishuOpenID
+			// Preserve existing API token unless explicitly changed elsewhere.
+			if u.APIToken == "" || u.APIToken == "••••••••" {
+				u.APIToken = existing.APIToken
+			}
 			s.users[i] = u
 			return s.saveUsers()
 		}
@@ -600,4 +621,72 @@ func (s *userStore) CanAccessTask(username, taskID, project, action string) (boo
 	}
 
 	return false, nil
+}
+
+// FindByEmail returns the user whose Email or Username equals email (case-insensitive), or ErrNotFound.
+func (s *userStore) FindByEmail(email string) (*User, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	le := toLowerTrim(email)
+	if le == "" {
+		return nil, &ErrNotFound{Entity: "user", Name: email}
+	}
+	for _, u := range s.users {
+		if toLowerTrim(u.Email) == le || toLowerTrim(u.Username) == le {
+			out := u
+			return &out, nil
+		}
+	}
+	return nil, &ErrNotFound{Entity: "user", Name: email}
+}
+
+// UpsertFeishuUser binds an existing user (matched by email/username) to the Feishu
+// identity, or creates a new no-password, no-permission user if none exists.
+func (s *userStore) UpsertFeishuUser(email, name, feishuUserID, feishuOpenID string) (*User, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	le := toLowerTrim(email)
+	// Try match existing by email or username.
+	for i := range s.users {
+		if (le != "" && (toLowerTrim(s.users[i].Email) == le || toLowerTrim(s.users[i].Username) == le)) ||
+			(feishuUserID != "" && s.users[i].FeishuUserID == feishuUserID) ||
+			(feishuOpenID != "" && s.users[i].FeishuOpenID == feishuOpenID) {
+			if s.users[i].Email == "" {
+				s.users[i].Email = email
+			}
+			s.users[i].FeishuUserID = feishuUserID
+			s.users[i].FeishuOpenID = feishuOpenID
+			if err := s.saveUsers(); err != nil {
+				return nil, err
+			}
+			out := s.users[i]
+			return &out, nil
+		}
+	}
+
+	// No match — create a new password-less user with role=user and no permissions.
+	username := email
+	if username == "" {
+		username = name
+	}
+	newUser := User{
+		Username:     username,
+		Password:     "", // Feishu-only account; local login disabled.
+		Role:         RoleUser,
+		Enabled:      true,
+		Email:        email,
+		FeishuUserID: feishuUserID,
+		FeishuOpenID: feishuOpenID,
+	}
+	s.users = append(s.users, newUser)
+	if err := s.saveUsers(); err != nil {
+		return nil, err
+	}
+	out := newUser
+	return &out, nil
+}
+
+func toLowerTrim(s string) string {
+	return strings.ToLower(strings.TrimSpace(s))
 }

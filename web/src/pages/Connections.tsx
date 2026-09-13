@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Tabs, Table, Button, Modal, Form, Input, InputNumber, Tag, Space, message, Popconfirm } from 'antd';
+import { Tabs, Table, Button, Modal, Form, Input, InputNumber, Tag, Space, message, Popconfirm, Switch } from 'antd';
 import { PlusOutlined, DeleteOutlined, CheckCircleOutlined, EditOutlined } from '@ant-design/icons';
 import { api } from '../api/client';
 import type { GitLabSource, K8sTarget, NotifyChannel } from '../api/client';
@@ -21,6 +21,8 @@ export default function Connections() {
   const [gitlabForm] = Form.useForm();
   const [k8sForm] = Form.useForm();
   const [notifyForm] = Form.useForm();
+  const [feishuForm] = Form.useForm();
+  const [savingFeishu, setSavingFeishu] = useState(false);
 
   const fetchAll = async () => {
     setLoading(true); setError(null);
@@ -31,6 +33,21 @@ export default function Connections() {
     finally { setLoading(false); }
   };
   useEffect(() => { fetchAll(); }, []);
+
+  // Load Feishu config into its form.
+  useEffect(() => {
+    api.getFeishuConfig().then(res => feishuForm.setFieldsValue(res.data)).catch(() => {});
+  }, [feishuForm]);
+
+  const handleFeishuSave = async (values: any) => {
+    setSavingFeishu(true);
+    try {
+      await api.saveFeishuConfig(values);
+      message.success('飞书配置已保存');
+      api.getFeishuConfig().then(res => feishuForm.setFieldsValue(res.data)).catch(() => {});
+    } catch (e: any) { message.error(e.message || '保存失败'); }
+    finally { setSavingFeishu(false); }
+  };
 
   // GitLab
   const handleGitlabSubmit = async (values: any) => {
@@ -181,6 +198,38 @@ export default function Connections() {
                 loading={loading}
               />
             </>
+          ),
+        },
+        {
+          key: 'feishu', label: '飞书集成',
+          children: (
+            <div style={{ maxWidth: 640 }}>
+              <p style={{ color: '#64748b' }}>
+                配置飞书企业自建应用后，本企业成员可在登录页扫码登录（首次登录自动创建无权限账号，由管理员分配权限）；
+                配置变更提交/驳回时会通过飞书通知相关人员。
+              </p>
+              <Form form={feishuForm} layout="vertical" onFinish={handleFeishuSave}>
+                <Form.Item name="enabled" label="启用飞书登录" valuePropName="checked" initialValue={false}>
+                  <Switch />
+                </Form.Item>
+                <Form.Item name="appId" label="App ID" rules={[{ required: true }]}>
+                  <Input placeholder="cli_xxxxxxxx" />
+                </Form.Item>
+                <Form.Item name="appSecret" label="App Secret" tooltip="已保存的密钥显示为 ***，留空或 *** 表示不修改">
+                  <Input.Password placeholder="留空表示不修改" />
+                </Form.Item>
+                <Form.Item name="redirectUri" label="重定向 URL(回调地址)" rules={[{ required: true }]}
+                  tooltip="需与飞书开放平台里配置的重定向 URL 完全一致">
+                  <Input placeholder={`${window.location.origin}/api/v1/auth/feishu/callback`} />
+                </Form.Item>
+                <div style={{ color: '#64748b', fontSize: 12, marginBottom: 12 }}>
+                  提示：在飞书开放平台「安全设置 - 重定向 URL」中填写：
+                  <code style={{ marginLeft: 4 }}>{window.location.origin}/api/v1/auth/feishu/callback</code>
+                  ，并开通 用户信息、im:message 等权限。
+                </div>
+                <Button type="primary" htmlType="submit" loading={savingFeishu}>保存飞书配置</Button>
+              </Form>
+            </div>
           ),
         },
       ]} />

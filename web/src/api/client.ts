@@ -94,6 +94,13 @@ export interface NotifyChannel {
   webhookUrl: string;
 }
 
+export interface FeishuConfig {
+  enabled: boolean;
+  appId: string;
+  appSecret: string;
+  redirectUri: string;
+}
+
 export interface DashboardSummary {
   total: number;
   running: number;
@@ -176,6 +183,9 @@ export interface User {
   role: UserRole;
   enabled: boolean;
   mfa?: MFASettings;
+  email?: string;
+  feishuUserId?: string;
+  feishuOpenId?: string;
 }
 
 export interface TaskPermission {
@@ -332,6 +342,11 @@ export const api = {
   compareByCommit: (taskId: string, from: string, to: string) =>
     apiClient.get<{ total: number; diffs: any[] }>('/compare/by-commit', { params: { taskId, from, to } }),
   checkGitLab: () => apiClient.post('/check-gitlab'),
+
+  // Feishu integration
+  getFeishuConfig: () => apiClient.get<FeishuConfig>('/feishu/config'),
+  saveFeishuConfig: (cfg: FeishuConfig) => apiClient.post('/feishu/config', cfg),
+  getFeishuStatus: () => apiClient.get<{ enabled: boolean }>('/auth/feishu/status'),
 
   // Change requests (ConfigMap edit → approve → commit to GitLab).
   listChangeRequests: (status?: string) =>

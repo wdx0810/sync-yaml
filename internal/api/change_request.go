@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -10,9 +11,73 @@ import (
 
 	"github.com/gorilla/mux"
 
+	"github.com/configmap-sync/configmap-sync/internal/feishu"
 	"github.com/configmap-sync/configmap-sync/internal/gitlab"
 	"github.com/configmap-sync/configmap-sync/internal/store"
 )
+
+// feishuClient returns a Feishu client if the integration is enabled/configured, else nil.
+func (s *Server) feishuClient() *feishu.Client {
+	if s.feishuStore == nil {
+		return nil
+	}
+	cfg, err := s.feishuStore.GetWithSecret()
+	if err != nil || !cfg.Enabled || cfg.AppID == "" || cfg.AppSecret == "" {
+		return nil
+	}
+	return feishu.NewClient(cfg.AppID, cfg.AppSecret)
+}
+
+// notifyReviewers sends a Feishu message to every user with edit permission on the
+// task (i.e. potential approvers) who has a bound Feishu identity. Best-effort.
+func (s *Server) notifyReviewers(cr *store.ChangeRequest) {
+	fc := s.feishuClient()
+	if fc == nil || s.userStore == nil {
+		return
+	}
+	users, err := s.userStore.ListUsers()
+	if err != nil {
+		return
+	}
+	text := "【配置变更待审核】\n环境: " + cr.TaskName +
+		"\nConfigMap: " + cr.Namespace + "/" + cr.Name +
+		"\n申请人: " + cr.Requester +
+		"\n说明: " + cr.Reason
+	for _, u := range users {
+		if u.FeishuOpenID == "" && u.FeishuUserID == "" {
+			continue
+		}
+		if u.Username == cr.Requester {
+			continue // don't notify the requester as a reviewer
+		}
+		ok, _ := s.userStore.CanAccessTask(u.Username, cr.TaskID, cr.Project, "edit")
+		if !ok {
+			continue
+		}
+		go func(openID, userID string) {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			_ = fc.SendText(ctx, openID, userID, text)
+		}(u.FeishuOpenID, u.FeishuUserID)
+	}
+}
+
+// notifyRequester sends a Feishu message to the change requester (e.g. on reject). Best-effort.
+func (s *Server) notifyRequester(cr *store.ChangeRequest, text string) {
+	fc := s.feishuClient()
+	if fc == nil || s.userStore == nil || cr.Requester == "" {
+		return
+	}
+	u, err := s.userStore.GetUser(cr.Requester)
+	if err != nil || (u.FeishuOpenID == "" && u.FeishuUserID == "") {
+		return
+	}
+	go func(openID, userID string) {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		_ = fc.SendText(ctx, openID, userID, text)
+	}(u.FeishuOpenID, u.FeishuUserID)
+}
 
 // contentHash returns a stable hash of file content, ignoring surrounding
 // whitespace so trivial formatting doesn't count as a version change.
@@ -265,6 +330,9 @@ func (s *Server) createChangeRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Notify potential reviewers via Feishu (best-effort, async).
+	s.notifyReviewers(cr)
+
 	resp := map[string]interface{}{"request": cr}
 	if len(samePending) > 0 {
 		resp["warning"] = "该文件已有 " + itoa(len(samePending)) + " 条待审核申请（申请人：" +
@@ -388,6 +456,13 @@ func (s *Server) approveChangeRequest(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+
+	// Notify the requester via Feishu that the change was approved & committed (best-effort).
+	s.notifyRequester(cr, "【配置变更已批准】\n环境: "+cr.TaskName+
+		"\nConfigMap: "+cr.Namespace+"/"+cr.Name+
+		"\n审核人: "+cr.Reviewer+
+		"\n已提交到 GitLab。")
+
 	writeJSON(w, http.StatusOK, cr)
 }
 
@@ -419,6 +494,17 @@ func (s *Server) rejectChangeRequest(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+
+	// Notify the requester via Feishu that the change was rejected (best-effort).
+	note := cr.ReviewNote
+	if note == "" {
+		note = "(无)"
+	}
+	s.notifyRequester(cr, "【配置变更被驳回】\n环境: "+cr.TaskName+
+		"\nConfigMap: "+cr.Namespace+"/"+cr.Name+
+		"\n审核人: "+cr.Reviewer+
+		"\n驳回原因: "+note)
+
 	writeJSON(w, http.StatusOK, cr)
 }
 

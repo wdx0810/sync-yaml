@@ -40,6 +40,7 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		Password string   `json:"password"`
 		Role     store.Role `json:"role"`
 		Enabled  bool     `json:"enabled"`
+		Email    string   `json:"email"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
@@ -65,6 +66,7 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		Password: req.Password,
 		Role:     req.Role,
 		Enabled:  req.Enabled,
+		Email:    req.Email,
 	}
 
 	if err := s.userStore.CreateUser(user); err != nil {
@@ -87,6 +89,7 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request, userna
 		Password string     `json:"password"`
 		Role     store.Role `json:"role"`
 		Enabled  *bool      `json:"enabled"`
+		Email    *string    `json:"email"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
@@ -109,12 +112,16 @@ func (s *Server) handleUpdateUser(w http.ResponseWriter, r *http.Request, userna
 		Password: req.Password,
 		Role:     req.Role,
 		Enabled:  existing.Enabled,
+		Email:    existing.Email,
 	}
 	if req.Enabled != nil {
 		user.Enabled = *req.Enabled
 	}
 	if req.Role == "" {
 		user.Role = existing.Role
+	}
+	if req.Email != nil {
+		user.Email = *req.Email
 	}
 
 	if err := s.userStore.UpdateUser(username, user); err != nil {
