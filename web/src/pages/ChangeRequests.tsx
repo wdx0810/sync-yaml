@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Tabs, Select, Input, Button, Space, Tag, Table, Modal, message, Card, Form, Radio } from 'antd';
-import { EditOutlined } from '@ant-design/icons';
+import { Tabs, Select, Input, Button, Space, Tag, Table, Modal, message, Card, Form, Segmented } from 'antd';
+import { EditOutlined, EyeOutlined, FileTextOutlined, CodeOutlined, SaveOutlined, CloseOutlined } from '@ant-design/icons';
 import ReactDiffViewer from 'react-diff-viewer-continued';
 import { api } from '../api/client';
 import type { SyncTask, ChangeRequest } from '../api/client';
@@ -229,48 +229,45 @@ function SubmitChange({ onSubmitted }: { onSubmitted: () => void }) {
             <Space wrap>
               <span>{editing ? '编辑内容' : (showRaw ? 'GitLab 原文（只读）' : '内容（已格式化）')}</span>
               {!showRaw && (
-                <Radio.Group
-                  size="small"
+                <Segmented
                   value={viewMode}
-                  onChange={(e) => {
+                  onChange={(v) => {
                     if (editing) { message.warning('请先保存或取消编辑再切换视图'); return; }
-                    setViewMode(e.target.value);
+                    setViewMode(v as 'full' | 'file');
                   }}
                   options={[
-                    { label: '完整 YAML', value: 'full' },
-                    { label: '文件内容', value: 'file' },
+                    { label: '完整 YAML', value: 'full', icon: <CodeOutlined /> },
+                    { label: '文件内容', value: 'file', icon: <FileTextOutlined /> },
                   ]}
-                  optionType="button"
                 />
               )}
               {!showRaw && viewMode === 'file' && fileKeys.length > 0 && (
                 <Select
-                  size="small"
                   value={fileKey || undefined}
                   onChange={(v) => {
                     if (editing) { message.warning('请先保存或取消编辑再切换文件'); return; }
                     setFileKey(v);
                   }}
-                  style={{ minWidth: 180 }}
+                  style={{ minWidth: 200 }}
                   options={fileKeys.map(k => ({ label: k, value: k }))}
                 />
               )}
             </Space>
           }
-          style={{ marginBottom: 12 }}
+          style={{ marginBottom: 12, boxShadow: '0 1px 4px rgba(0,0,0,0.08)' }}
           loading={loadingFile}
           extra={
             editing ? (
               <Space>
-                <Button size="small" onClick={cancelEdit}>取消</Button>
-                <Button size="small" type="primary" onClick={saveEdit}>保存修改</Button>
+                <Button icon={<CloseOutlined />} onClick={cancelEdit}>取消</Button>
+                <Button type="primary" icon={<SaveOutlined />} onClick={saveEdit}>保存修改</Button>
               </Space>
             ) : (
               <Space>
-                <Button size="small" onClick={() => setShowRaw(s => !s)}>
+                <Button icon={<EyeOutlined />} onClick={() => setShowRaw(s => !s)}>
                   {showRaw ? '查看格式化' : '查看原文'}
                 </Button>
-                <Button size="small" icon={<EditOutlined />} onClick={startEdit}>编辑</Button>
+                <Button type="primary" ghost icon={<EditOutlined />} onClick={startEdit}>编辑</Button>
               </Space>
             )
           }
@@ -304,7 +301,7 @@ function SubmitChange({ onSubmitted }: { onSubmitted: () => void }) {
           <Form.Item label="变更说明" required>
             <Input.TextArea value={reason} onChange={(e) => setReason(e.target.value)} rows={2} placeholder="请说明本次修改的目的" />
           </Form.Item>
-          <Button type="primary" loading={submitting} disabled={editing || !changed} onClick={handleSubmit}>提交审核</Button>
+          <Button type="primary" size="large" loading={submitting} disabled={editing || !changed} onClick={handleSubmit}>提交审核</Button>
           {editing && <span style={{ marginLeft: 12, color: '#f59e0b' }}>请先保存或取消编辑</span>}
         </Form>
       )}

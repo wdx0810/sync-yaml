@@ -14,6 +14,14 @@ export function formatYaml(raw: string): { text: string; changed: boolean; ok: b
     if (doc === undefined || doc === null || typeof doc !== 'object') {
       return { text: raw, changed: false, ok: false };
     }
+    // Only reformat when the document actually needs it, i.e. it contains a
+    // multi-line string value (which raw serialization tends to squash into an
+    // escaped one-liner like "server:\n  port: 80\n..."). If no such value
+    // exists, the file is already fine — keep it untouched and don't claim it
+    // was formatted.
+    if (!hasMultilineStringValue(doc)) {
+      return { text: raw, changed: false, ok: true };
+    }
     // Strip trailing whitespace from every line inside string values so block
     // scalars serialize cleanly.
     const cleaned = stripTrailingInStrings(doc);
@@ -25,6 +33,18 @@ export function formatYaml(raw: string): { text: string; changed: boolean; ok: b
   } catch {
     return { text: raw, changed: false, ok: false };
   }
+}
+
+// hasMultilineStringValue returns true if any string value in the object spans
+// multiple lines (contains a newline). Those are the values that get squashed
+// into hard-to-read escaped strings and benefit from block-scalar formatting.
+function hasMultilineStringValue(node: any): boolean {
+  if (typeof node === 'string') return node.indexOf('\n') !== -1;
+  if (Array.isArray(node)) return node.some(hasMultilineStringValue);
+  if (node && typeof node === 'object') {
+    return Object.values(node).some(hasMultilineStringValue);
+  }
+  return false;
 }
 
 // parseConfigMap parses a full ConfigMap YAML and returns its metadata and data keys.
