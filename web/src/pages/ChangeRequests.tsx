@@ -6,6 +6,7 @@ import { api } from '../api/client';
 import type { SyncTask, ChangeRequest } from '../api/client';
 import { buildEnvOptions } from '../utils/taskEnv';
 import { diffRenderContent } from '../utils/trailingSpace';
+import { formatYaml } from '../utils/yamlFormat';
 
 const statusMeta: Record<string, { color: string; label: string }> = {
   pending: { color: 'orange', label: '待审核' },
@@ -20,12 +21,14 @@ function SubmitChange({ onSubmitted }: { onSubmitted: () => void }) {
   const [taskId, setTaskId] = useState<string>('');
   const [configMaps, setConfigMaps] = useState<{ namespace: string; name: string; path: string }[]>([]);
   const [selected, setSelected] = useState<string>(''); // "namespace/name"
-  const [content, setContent] = useState<string>('');   // current (saved) content
-  const [original, setOriginal] = useState<string>(''); // original GitLab content
+  const [content, setContent] = useState<string>('');   // current (saved) content — formatted
+  const [original, setOriginal] = useState<string>(''); // formatted baseline (for change detection)
+  const [rawContent, setRawContent] = useState<string>(''); // untouched GitLab raw content
   const [baseVersion, setBaseVersion] = useState<string>(''); // hash captured at load (optimistic lock)
   const [reason, setReason] = useState<string>('');
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<string>('');        // working copy while editing
+  const [showRaw, setShowRaw] = useState(false);          // toggle: view formatted vs original raw
   const [loadingCM, setLoadingCM] = useState(false);
   const [loadingFile, setLoadingFile] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -39,6 +42,8 @@ function SubmitChange({ onSubmitted }: { onSubmitted: () => void }) {
     setSelected('');
     setContent('');
     setOriginal('');
+    setRawContent('');
+    setShowRaw(false);
     setEditing(false);
     setConfigMaps([]);
     setLoadingCM(true);
@@ -53,12 +58,23 @@ function SubmitChange({ onSubmitted }: { onSubmitted: () => void }) {
     setSelected(v);
     setContent('');
     setOriginal('');
+    setRawContent('');
+    setShowRaw(false);
     setEditing(false);
     const [ns, name] = v.split('|');
     setLoadingFile(true);
     const hide = message.loading('正在加载 YAML 内容...', 0);
     api.loadChangeRequestFile(taskId, ns, name)
-      .then(res => { setContent(res.data.content); setOriginal(res.data.content); setBaseVersion(res.data.baseVersion || ''); })
+      .then(res => {
+        const raw = res.data.content;
+        // Format for readable multi-line display; falls back to raw if unparseable.
+        const { text: formatted, ok } = formatYaml(raw);
+        const display = ok ? formatted : raw;
+        setRawContent(raw);
+        setContent(display);
+        setOriginal(display);
+        setBaseVersion(res.data.baseVersion || '');
+      })
       .catch((e: any) => message.error(e.message || '加载失败'))
       .finally(() => { hide(); setLoadingFile(false); });
   };
@@ -167,7 +183,7 @@ function SubmitChange({ onSubmitted }: { onSubmitted: () => void }) {
       {selected && (
         <Card
           size="small"
-          title={editing ? '编辑 YAML 内容' : 'YAML 内容（只读）'}
+          title={editing ? '编辑 YAML 内容（已格式化）' : (showRaw ? 'YAML 内容（GitLab 原文，只读）' : 'YAML 内容（已格式化，只读）')}
           style={{ marginBottom: 12 }}
           loading={loadingFile}
           extra={
@@ -177,12 +193,22 @@ function SubmitChange({ onSubmitted }: { onSubmitted: () => void }) {
                 <Button size="small" type="primary" onClick={saveEdit}>保存修改</Button>
               </Space>
             ) : (
-              <Button size="small" icon={<EditOutlined />} onClick={startEdit}>编辑</Button>
+              <Space>
+                <Button size="small" onClick={() => setShowRaw(s => !s)}>
+                  {showRaw ? '查看格式化' : '查看原文'}
+                </Button>
+                <Button size="small" icon={<EditOutlined />} onClick={startEdit}>编辑</Button>
+              </Space>
             )
           }
         >
+          {!editing && rawContent && content !== rawContent && !showRaw && (
+            <div style={{ color: '#64748b', fontSize: 12, marginBottom: 6 }}>
+              已格式化为多行显示（去除行尾空格）。提交后 GitLab 将保存为此规整格式；点“查看原文”可对照原始内容。
+            </div>
+          )}
           <Input.TextArea
-            value={editing ? draft : content}
+            value={editing ? draft : (showRaw ? rawContent : content)}
             onChange={(e) => setDraft(e.target.value)}
             readOnly={!editing}
             autoSize={{ minRows: 16, maxRows: 36 }}
