@@ -75,20 +75,11 @@ function SubmitChange({ onSubmitted }: { onSubmitted: () => void }) {
     }
   };
 
-  const handleSubmit = async () => {
-    if (!taskId) { message.warning('请选择环境'); return; }
-    if (!selected) { message.warning('请选择 ConfigMap'); return; }
-    if (editing) { message.warning('请先保存或取消当前编辑'); return; }
-    if (!content.trim()) { message.warning('内容不能为空'); return; }
-    if (content === original) { message.warning('内容未修改'); return; }
-    if (!reason.trim()) { message.warning('请填写变更说明'); return; }
-    const [ns, name] = selected.split('|');
+  // Actually create the change request and reset the form.
+  const doSubmit = async (ns: string, name: string) => {
     setSubmitting(true);
     try {
-      const res = await api.createChangeRequest({ taskId, namespace: ns, name, newYaml: content, reason, baseVersion });
-      if (res.data.warning) {
-        message.warning(res.data.warning, 8);
-      }
+      await api.createChangeRequest({ taskId, namespace: ns, name, newYaml: content, reason, baseVersion });
       message.success('已提交，等待审核');
       setSelected(''); setContent(''); setOriginal(''); setBaseVersion(''); setReason(''); setEditing(false);
       onSubmitted();
@@ -97,6 +88,52 @@ function SubmitChange({ onSubmitted }: { onSubmitted: () => void }) {
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const handleSubmit = async () => {
+    if (!taskId) { message.warning('请选择环境'); return; }
+    if (!selected) { message.warning('请选择 ConfigMap'); return; }
+    if (editing) { message.warning('请先保存或取消当前编辑'); return; }
+    if (!content.trim()) { message.warning('内容不能为空'); return; }
+    if (content === original) { message.warning('内容未修改'); return; }
+    if (!reason.trim()) { message.warning('请填写变更说明'); return; }
+    const [ns, name] = selected.split('|');
+
+    // Pre-check: does this ConfigMap already have pending change requests?
+    // If so, pop a confirm dialog so the user decides whether to proceed.
+    try {
+      const res = await api.listChangeRequests('pending');
+      const dup = (res.data || []).filter(
+        (r) => r.taskId === taskId && r.namespace === ns && r.name === name
+      );
+      if (dup.length > 0) {
+        const who = Array.from(new Set(dup.map((r) => r.requester))).join('、');
+        Modal.confirm({
+          title: '该配置已有待审核的变更',
+          width: 520,
+          content: (
+            <div>
+              <p>
+                <b>{ns}/{name}</b> 当前已有 <b style={{ color: '#d46b08' }}>{dup.length}</b> 条待审核申请
+                （申请人：{who}）。
+              </p>
+              <p style={{ color: '#64748b', margin: 0 }}>
+                多人基于同一版本修改可能产生冲突：先批准的会写入 GitLab，后批准的若基线过期将被系统标记为“已失效(冲突)”并需重新提交。
+              </p>
+              <p style={{ marginTop: 8 }}>是否仍要提交本次变更？</p>
+            </div>
+          ),
+          okText: '仍要提交',
+          cancelText: '取消',
+          onOk: () => doSubmit(ns, name),
+        });
+        return;
+      }
+    } catch {
+      // If the pre-check fails, fall through and submit normally.
+    }
+
+    doSubmit(ns, name);
   };
 
   const changed = content !== original && original !== '';
