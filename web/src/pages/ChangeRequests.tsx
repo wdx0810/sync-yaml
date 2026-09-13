@@ -245,9 +245,21 @@ function ReviewList({ refreshKey }: { refreshKey: number }) {
       hide();
       // 409 = optimistic-lock conflict: the file changed since this request's base.
       if (e.status === 409) {
-        message.error(e.message || '版本冲突，申请已失效', 10);
         setDetail(null); setNote('');
         fetchData();
+        Modal.warning({
+          title: '版本冲突，提交失败',
+          width: 520,
+          content: (
+            <div>
+              <p style={{ margin: 0 }}>{e.message || '该文件已被其他变更更新，当前版本与申请基线不一致。'}</p>
+              <p style={{ color: '#64748b', marginTop: 8, marginBottom: 0 }}>
+                本申请已标记为“已失效(冲突)”。可在列表中点“查看”对照 GitLab 最新内容，再通知申请人基于最新内容重新提交。
+              </p>
+            </div>
+          ),
+          okText: '知道了',
+        });
       } else {
         message.error(e.message || '操作失败');
       }
