@@ -1,6 +1,8 @@
 package api
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -11,6 +13,13 @@ import (
 	"github.com/configmap-sync/configmap-sync/internal/gitlab"
 	"github.com/configmap-sync/configmap-sync/internal/store"
 )
+
+// contentHash returns a stable hash of file content, ignoring surrounding
+// whitespace so trivial formatting doesn't count as a version change.
+func contentHash(content string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(content)))
+	return hex.EncodeToString(sum[:])
+}
 
 // The change-request module lets developers edit a ConfigMap's YAML and submit it
 // for approval. Approving commits the new content to GitLab only — it never touches
@@ -128,8 +137,9 @@ func (s *Server) loadChangeRequestFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"filePath": filePath,
-		"content":  string(content),
+		"filePath":    filePath,
+		"content":     string(content),
+		"baseVersion": contentHash(string(content)),
 	})
 }
 
@@ -180,11 +190,12 @@ func (s *Server) getChangeRequest(w http.ResponseWriter, r *http.Request) {
 // createChangeRequest handles POST /api/v1/change-requests
 func (s *Server) createChangeRequest(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		TaskID    string `json:"taskId"`
-		Namespace string `json:"namespace"`
-		Name      string `json:"name"`
-		NewYAML   string `json:"newYaml"`
-		Reason    string `json:"reason"`
+		TaskID      string `json:"taskId"`
+		Namespace   string `json:"namespace"`
+		Name        string `json:"name"`
+		NewYAML     string `json:"newYaml"`
+		Reason      string `json:"reason"`
+		BaseVersion string `json:"baseVersion"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "请求格式错误")
@@ -217,25 +228,85 @@ func (s *Server) createChangeRequest(w http.ResponseWriter, r *http.Request) {
 		oldYAML = string(content)
 	}
 
+	// Base version for optimistic locking. Prefer the client-provided hash
+	// (captured at load time); fall back to hashing what we just fetched.
+	baseVersion := body.BaseVersion
+	if baseVersion == "" {
+		baseVersion = contentHash(oldYAML)
+	}
+
+	// Warn (do not block) if there are other pending requests for the same file.
+	var samePending []string
+	if all, err := s.changeReqStore.List(store.ChangeRequestPending); err == nil {
+		for _, cr := range all {
+			if cr.FilePath == filePath {
+				samePending = append(samePending, cr.Requester)
+			}
+		}
+	}
+
 	username := r.Header.Get("X-Username")
 	cr := &store.ChangeRequest{
-		TaskID:    body.TaskID,
-		TaskName:  task.Name,
-		Project:   task.Project,
-		Namespace: body.Namespace,
-		Name:      body.Name,
-		FilePath:  filePath,
-		OldYAML:   oldYAML,
-		NewYAML:   body.NewYAML,
-		Reason:    body.Reason,
-		Status:    store.ChangeRequestPending,
-		Requester: username,
+		TaskID:      body.TaskID,
+		TaskName:    task.Name,
+		Project:     task.Project,
+		Namespace:   body.Namespace,
+		Name:        body.Name,
+		FilePath:    filePath,
+		OldYAML:     oldYAML,
+		NewYAML:     body.NewYAML,
+		BaseVersion: baseVersion,
+		Reason:      body.Reason,
+		Status:      store.ChangeRequestPending,
+		Requester:   username,
 	}
 	if err := s.changeReqStore.Create(cr); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, cr)
+
+	resp := map[string]interface{}{"request": cr}
+	if len(samePending) > 0 {
+		resp["warning"] = "该文件已有 " + itoa(len(samePending)) + " 条待审核申请（申请人：" +
+			strings.Join(uniqueStrings(samePending), "、") + "），请审核人注意先后顺序。"
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// itoa is a tiny int-to-string helper to avoid importing strconv for one use.
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	neg := n < 0
+	if neg {
+		n = -n
+	}
+	var buf [20]byte
+	i := len(buf)
+	for n > 0 {
+		i--
+		buf[i] = byte('0' + n%10)
+		n /= 10
+	}
+	s := string(buf[i:])
+	if neg {
+		return "-" + s
+	}
+	return s
+}
+
+// uniqueStrings returns the input with duplicates removed, order preserved.
+func uniqueStrings(in []string) []string {
+	seen := make(map[string]bool)
+	var out []string
+	for _, s := range in {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // approveChangeRequest handles POST /api/v1/change-requests/{id}/approve
@@ -270,6 +341,28 @@ func (s *Server) approveChangeRequest(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+
+	// Optimistic-lock check: re-read the current GitLab content and compare its
+	// hash to the base version captured when the request was created. If they
+	// differ, the file was changed by another commit in the meantime — reject
+	// the commit, mark this request as conflicted, and stash the current content
+	// so the UI can show a base-vs-latest diff.
+	if cr.BaseVersion != "" {
+		currentContent := ""
+		if b, gerr := gc.GetFile(r.Context(), cr.FilePath); gerr == nil {
+			currentContent = string(b)
+		}
+		if contentHash(currentContent) != cr.BaseVersion {
+			cr.Status = store.ChangeRequestConflict
+			cr.Reviewer = r.Header.Get("X-Username")
+			cr.ReviewedAt = time.Now().Format(time.RFC3339)
+			cr.ConflictYAML = currentContent
+			_ = s.changeReqStore.Update(cr)
+			writeError(w, http.StatusConflict,
+				"提交失败：该文件已被其他变更更新（当前版本与申请基线不一致）。本申请已标记为“已失效(冲突)”，请通知申请人基于最新内容重新提交。")
+			return
+		}
 	}
 
 	username := r.Header.Get("X-Username")

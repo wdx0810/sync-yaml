@@ -10,6 +10,7 @@ const statusMeta: Record<string, { color: string; label: string }> = {
   pending: { color: 'orange', label: '待审核' },
   approved: { color: 'green', label: '已批准(已提交GitLab)' },
   rejected: { color: 'red', label: '已驳回' },
+  conflict: { color: 'volcano', label: '已失效(冲突)' },
 };
 
 // ---- Submit a new change request ----
@@ -20,6 +21,7 @@ function SubmitChange({ onSubmitted }: { onSubmitted: () => void }) {
   const [selected, setSelected] = useState<string>(''); // "namespace/name"
   const [content, setContent] = useState<string>('');   // current (saved) content
   const [original, setOriginal] = useState<string>(''); // original GitLab content
+  const [baseVersion, setBaseVersion] = useState<string>(''); // hash captured at load (optimistic lock)
   const [reason, setReason] = useState<string>('');
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<string>('');        // working copy while editing
@@ -55,7 +57,7 @@ function SubmitChange({ onSubmitted }: { onSubmitted: () => void }) {
     setLoadingFile(true);
     const hide = message.loading('正在加载 YAML 内容...', 0);
     api.loadChangeRequestFile(taskId, ns, name)
-      .then(res => { setContent(res.data.content); setOriginal(res.data.content); })
+      .then(res => { setContent(res.data.content); setOriginal(res.data.content); setBaseVersion(res.data.baseVersion || ''); })
       .catch((e: any) => message.error(e.message || '加载失败'))
       .finally(() => { hide(); setLoadingFile(false); });
   };
@@ -83,9 +85,12 @@ function SubmitChange({ onSubmitted }: { onSubmitted: () => void }) {
     const [ns, name] = selected.split('|');
     setSubmitting(true);
     try {
-      await api.createChangeRequest({ taskId, namespace: ns, name, newYaml: content, reason });
+      const res = await api.createChangeRequest({ taskId, namespace: ns, name, newYaml: content, reason, baseVersion });
+      if (res.data.warning) {
+        message.warning(res.data.warning, 8);
+      }
       message.success('已提交，等待审核');
-      setSelected(''); setContent(''); setOriginal(''); setReason(''); setEditing(false);
+      setSelected(''); setContent(''); setOriginal(''); setBaseVersion(''); setReason(''); setEditing(false);
       onSubmitted();
     } catch (e: any) {
       message.error(e.message || '提交失败');
@@ -192,7 +197,7 @@ function ReviewList({ refreshKey }: { refreshKey: number }) {
   const handleApprove = async () => {
     if (!detail) return;
     setActing(true);
-    const hide = message.loading('正在提交到 GitLab...', 0);
+    const hide = message.loading('正在校验版本并提交到 GitLab...', 0);
     try {
       await api.approveChangeRequest(detail.id, note);
       hide();
@@ -201,7 +206,14 @@ function ReviewList({ refreshKey }: { refreshKey: number }) {
       fetchData();
     } catch (e: any) {
       hide();
-      message.error(e.message || '操作失败');
+      // 409 = optimistic-lock conflict: the file changed since this request's base.
+      if (e.status === 409) {
+        message.error(e.message || '版本冲突，申请已失效', 10);
+        setDetail(null); setNote('');
+        fetchData();
+      } else {
+        message.error(e.message || '操作失败');
+      }
     } finally {
       setActing(false);
     }
@@ -232,9 +244,24 @@ function ReviewList({ refreshKey }: { refreshKey: number }) {
     }
   };
 
+  // File paths that have more than one pending request — flag for reviewer awareness.
+  const pendingCountByFile: Record<string, number> = {};
+  for (const r of requests) {
+    if (r.status === 'pending') pendingCountByFile[r.filePath] = (pendingCountByFile[r.filePath] || 0) + 1;
+  }
+
   const columns = [
     { title: '环境(任务)', dataIndex: 'taskName', width: 160 },
-    { title: 'ConfigMap', width: 200, render: (_: any, r: ChangeRequest) => `${r.namespace}/${r.name}` },
+    {
+      title: 'ConfigMap', width: 240, render: (_: any, r: ChangeRequest) => (
+        <Space size={4}>
+          <span>{r.namespace}/{r.name}</span>
+          {r.status === 'pending' && pendingCountByFile[r.filePath] > 1 && (
+            <Tag color="gold">同文件{pendingCountByFile[r.filePath]}条待审</Tag>
+          )}
+        </Space>
+      ),
+    },
     { title: '申请人', dataIndex: 'requester', width: 110 },
     { title: '说明', dataIndex: 'reason', ellipsis: true },
     {
@@ -267,6 +294,7 @@ function ReviewList({ refreshKey }: { refreshKey: number }) {
             { label: '待审核', value: 'pending' },
             { label: '已批准', value: 'approved' },
             { label: '已驳回', value: 'rejected' },
+            { label: '已失效(冲突)', value: 'conflict' },
           ]}
         />
         <Button onClick={fetchData}>刷新</Button>
@@ -295,9 +323,32 @@ function ReviewList({ refreshKey }: { refreshKey: number }) {
             <p><b>变更说明:</b> {detail.reason || '(无)'}</p>
             {detail.reviewer && <p><b>审核人:</b> {detail.reviewer}　<b>审核备注:</b> {detail.reviewNote || '(无)'}</p>}
             {detail.commitError && <p style={{ color: '#ef4444' }}><b>上次提交错误:</b> {detail.commitError}</p>}
-            <div style={{ maxHeight: 420, overflow: 'auto', border: '1px solid #eee', borderRadius: 6 }}>
-              <ReactDiffViewer oldValue={detail.oldYaml} newValue={detail.newYaml} splitView leftTitle="当前 GitLab" rightTitle="申请修改后" useDarkTheme={false} />
-            </div>
+
+            {detail.status === 'conflict' && (
+              <div style={{ background: '#fff7e6', border: '1px solid #ffd591', borderRadius: 6, padding: 10, marginBottom: 12 }}>
+                <p style={{ color: '#d46b08', margin: 0 }}>
+                  <b>版本冲突：</b>该申请提交后，GitLab 中该文件已被其他变更更新，申请基线已过期，无法应用。
+                  下方展示「申请时的基线」与「GitLab 最新内容」的差异，请申请人基于最新内容重新提交。
+                </p>
+              </div>
+            )}
+
+            {detail.status === 'conflict' ? (
+              <>
+                <p style={{ marginBottom: 4 }}><b>基线 vs GitLab 最新（他人已合入的变更）：</b></p>
+                <div style={{ maxHeight: 300, overflow: 'auto', border: '1px solid #eee', borderRadius: 6, marginBottom: 12 }}>
+                  <ReactDiffViewer oldValue={detail.oldYaml} newValue={detail.conflictYaml || ''} splitView leftTitle="申请时基线" rightTitle="GitLab 最新" useDarkTheme={false} />
+                </div>
+                <p style={{ marginBottom: 4 }}><b>本申请原本的修改（基线 → 申请修改后）：</b></p>
+                <div style={{ maxHeight: 300, overflow: 'auto', border: '1px solid #eee', borderRadius: 6 }}>
+                  <ReactDiffViewer oldValue={detail.oldYaml} newValue={detail.newYaml} splitView leftTitle="申请时基线" rightTitle="申请修改后" useDarkTheme={false} />
+                </div>
+              </>
+            ) : (
+              <div style={{ maxHeight: 420, overflow: 'auto', border: '1px solid #eee', borderRadius: 6 }}>
+                <ReactDiffViewer oldValue={detail.oldYaml} newValue={detail.newYaml} splitView leftTitle="当前 GitLab" rightTitle="申请修改后" useDarkTheme={false} />
+              </div>
+            )}
             {detail.status === 'pending' && (
               <Input.TextArea
                 style={{ marginTop: 12 }}

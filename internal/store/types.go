@@ -61,14 +61,18 @@ type ChangeRequest struct {
 	FilePath    string `json:"filePath"`    // resolved GitLab file path
 	OldYAML     string `json:"oldYaml"`     // content at submit time (for diff)
 	NewYAML     string `json:"newYaml"`     // proposed content
+	BaseVersion string `json:"baseVersion"` // hash of GitLab content when loaded (optimistic lock)
 	Reason      string `json:"reason"`      // change description
-	Status      string `json:"status"`      // pending / approved / rejected
+	Status      string `json:"status"`      // pending / approved / rejected / conflict
 	Requester   string `json:"requester"`
 	Reviewer    string `json:"reviewer,omitempty"`
 	ReviewNote  string `json:"reviewNote,omitempty"`
 	CommitError string `json:"commitError,omitempty"`
-	CreatedAt   string `json:"createdAt"`
-	ReviewedAt  string `json:"reviewedAt,omitempty"`
+	// ConflictYAML holds the current GitLab content at the moment a conflict was
+	// detected, so the UI can show base-vs-latest diff to the requester/reviewer.
+	ConflictYAML string `json:"conflictYaml,omitempty"`
+	CreatedAt    string `json:"createdAt"`
+	ReviewedAt   string `json:"reviewedAt,omitempty"`
 }
 
 // Change request statuses.
@@ -76,6 +80,7 @@ const (
 	ChangeRequestPending  = "pending"
 	ChangeRequestApproved = "approved"
 	ChangeRequestRejected = "rejected"
+	ChangeRequestConflict = "conflict" // base version no longer matches GitLab; must redo
 )
 
 // ErrNotFound is returned when an entity is not found.

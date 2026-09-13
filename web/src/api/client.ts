@@ -238,12 +238,14 @@ export interface ChangeRequest {
   filePath: string;
   oldYaml: string;
   newYaml: string;
+  baseVersion?: string;
   reason: string;
   status: string;
   requester: string;
   reviewer?: string;
   reviewNote?: string;
   commitError?: string;
+  conflictYaml?: string;
   createdAt: string;
   reviewedAt?: string;
 }
@@ -338,9 +340,9 @@ export const api = {
   listChangeRequestConfigMaps: (taskId: string) =>
     apiClient.get<{ namespace: string; name: string; path: string }[]>('/change-requests/configmaps', { params: { taskId } }),
   loadChangeRequestFile: (taskId: string, namespace: string, name: string) =>
-    apiClient.get<{ filePath: string; content: string }>('/change-requests/load-file', { params: { taskId, namespace, name } }),
-  createChangeRequest: (body: { taskId: string; namespace: string; name: string; newYaml: string; reason: string }) =>
-    apiClient.post<ChangeRequest>('/change-requests', body),
+    apiClient.get<{ filePath: string; content: string; baseVersion: string }>('/change-requests/load-file', { params: { taskId, namespace, name } }),
+  createChangeRequest: (body: { taskId: string; namespace: string; name: string; newYaml: string; reason: string; baseVersion: string }) =>
+    apiClient.post<{ request: ChangeRequest; warning?: string }>('/change-requests', body),
   approveChangeRequest: (id: string, note?: string) =>
     apiClient.post<ChangeRequest>(`/change-requests/${id}/approve`, { note: note || '' }),
   rejectChangeRequest: (id: string, note?: string) =>
