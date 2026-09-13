@@ -80,21 +80,46 @@ export default function Tasks() {
   };
 
   const showSyncResult = (info: any) => {
-    if (info?.total !== undefined) {
-      const parts = [`总计 ${info.total} 个`];
-      if (info.synced > 0) parts.push(`${info.synced} 个已同步`);
-      if (info.skipped > 0) parts.push(`${info.skipped} 个无变更跳过`);
-      if (info.failed > 0) parts.push(`${info.failed} 个失败`);
-      let detail = parts.join(', ');
-      if (info.syncedNames?.length > 0) detail += '\n✓ 更新: ' + info.syncedNames.slice(0, 10).join(', ');
-      if (info.failedNames?.length > 0) detail += '\n✗ 失败: ' + info.failedNames.slice(0, 10).join(', ');
-      if (info.errors?.length > 0) detail += '\n错误详情: ' + info.errors.slice(0, 5).join('; ');
-      if (info.synced === 0 && info.failed === 0) message.info(detail, 8);
-      else if (info.failed > 0) message.warning(detail, 15);
-      else message.success(detail, 8);
-    } else {
-      message.success('同步完成');
+    if (info?.total === undefined) {
+      Modal.success({ title: '同步完成', content: '同步已完成' });
+      return;
     }
+
+    const listBlock = (title: string, color: string, names?: string[]) => {
+      if (!names || names.length === 0) return null;
+      return (
+        <div style={{ marginTop: 8 }}>
+          <div style={{ color, fontWeight: 600, marginBottom: 4 }}>{title}（{names.length}）</div>
+          <div style={{ maxHeight: 160, overflow: 'auto', background: '#f8fafc', borderRadius: 6, padding: 8, fontSize: 12, fontFamily: 'monospace' }}>
+            {names.map((n, i) => <div key={i}>{n}</div>)}
+          </div>
+        </div>
+      );
+    };
+
+    const content = (
+      <div>
+        <Space size="large" wrap>
+          <span>总计 <b>{info.total}</b> 个</span>
+          {info.synced > 0 && <span style={{ color: '#16a34a' }}>已同步 <b>{info.synced}</b></span>}
+          {info.skipped > 0 && <span style={{ color: '#64748b' }}>无变更跳过 <b>{info.skipped}</b></span>}
+          {info.failed > 0 && <span style={{ color: '#dc2626' }}>失败 <b>{info.failed}</b></span>}
+        </Space>
+        {listBlock('✓ 已同步', '#16a34a', info.syncedNames)}
+        {listBlock('✗ 失败', '#dc2626', info.failedNames)}
+        {info.errors?.length > 0 && (
+          <div style={{ marginTop: 8 }}>
+            <div style={{ color: '#dc2626', fontWeight: 600, marginBottom: 4 }}>错误详情</div>
+            <div style={{ maxHeight: 160, overflow: 'auto', background: '#fef2f2', borderRadius: 6, padding: 8, fontSize: 12, fontFamily: 'monospace', color: '#b91c1c' }}>
+              {info.errors.map((e: string, i: number) => <div key={i}>{e}</div>)}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+
+    const modalFn = info.failed > 0 ? Modal.warning : Modal.success;
+    modalFn({ title: '同步结果', width: 640, content, okText: '知道了' });
   };
 
   const handleSync = async (task: SyncTask) => {
