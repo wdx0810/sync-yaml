@@ -232,13 +232,11 @@ function SubmitChange({ onSubmitted }: { onSubmitted: () => void }) {
             <Space wrap size={12}>
               <span
                 style={{
-                  fontWeight: 700,
+                  fontWeight: 600,
                   fontSize: 14,
-                  padding: '4px 12px',
-                  borderRadius: 6,
-                  color: '#fff',
-                  background: editing ? '#f59e0b' : (showRaw ? '#64748b' : '#2563eb'),
-                  boxShadow: '0 2px 4px rgba(0,0,0,0.15)',
+                  paddingLeft: 10,
+                  borderLeft: `4px solid ${editing ? '#f59e0b' : (showRaw ? '#94a3b8' : '#2563eb')}`,
+                  color: '#1e293b',
                 }}
               >
                 {editing ? '编辑内容' : (showRaw ? 'GitLab 原文（只读）' : (isFormatted ? '内容（已格式化）' : '内容'))}
