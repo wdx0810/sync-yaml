@@ -186,6 +186,7 @@ export interface User {
   email?: string;
   feishuUserId?: string;
   feishuOpenId?: string;
+  apiToken?: string;
 }
 
 export interface TaskPermission {
@@ -317,6 +318,10 @@ export const api = {
   resetUserMFA: (username: string) => apiClient.post(`/users/${username}/mfa-reset`),
   setUserMFAEnabled: (username: string, enabled: boolean) =>
     apiClient.put(`/users/${username}/mfa-enabled`, { enabled }),
+  generateUserApiToken: (username: string) =>
+    apiClient.post<{ token: string }>(`/users/${username}/api-token`),
+  deleteUserApiToken: (username: string) =>
+    apiClient.delete(`/users/${username}/api-token`),
 
   // MFA
   getMFAStatus: () => apiClient.get<{ enabled: boolean }>('/auth/mfa/status'),

@@ -80,6 +80,53 @@ export default function Users() {
     }
   };
 
+  const handleApiToken = (record: User) => {
+    Modal.confirm({
+      title: `为用户 ${record.username} 生成 API Token`,
+      width: 560,
+      content: (
+        <div>
+          <p style={{ margin: 0 }}>用于通过接口调用该用户有『同步』权限的任务。生成新 Token 将使旧 Token 失效。</p>
+          <p style={{ color: '#64748b', marginTop: 8, marginBottom: 0 }}>Token 仅在生成时完整显示一次，请妥善保存。</p>
+        </div>
+      ),
+      okText: '生成',
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          const res = await api.generateUserApiToken(record.username);
+          const token = res.data.token;
+          const base = window.location.origin;
+          Modal.success({
+            title: 'API Token 已生成',
+            width: 640,
+            content: (
+              <div>
+                <p style={{ marginBottom: 6 }}><b>Token：</b></p>
+                <Input.TextArea value={token} rows={2} readOnly style={{ fontFamily: 'monospace', fontSize: 12 }} />
+                <p style={{ marginTop: 12, marginBottom: 6 }}><b>调用示例（触发某任务同步，需该用户有此任务同步权限）：</b></p>
+                <Input.TextArea
+                  value={`curl -X POST "${base}/api/v1/hooks/sync/{任务ID}?token=${token}"`}
+                  rows={2} readOnly style={{ fontFamily: 'monospace', fontSize: 12 }}
+                />
+                <p style={{ marginTop: 12, color: '#f59e0b', marginBottom: 0 }}>请妥善保管，关闭后不再完整显示。</p>
+              </div>
+            ),
+          });
+          fetchAll();
+        } catch (e: any) { message.error(e.message || '生成失败'); }
+      },
+    });
+  };
+
+  const handleDeleteApiToken = async (username: string) => {
+    try {
+      await api.deleteUserApiToken(username);
+      message.success('已删除该用户的 API Token');
+      fetchAll();
+    } catch (e: any) { message.error(e.message || '删除失败'); }
+  };
+
   const handleResetMFA = async (username: string) => {
     try {
       await api.resetUserMFA(username);
@@ -241,7 +288,7 @@ export default function Users() {
       },
     },
     {
-      title: '操作', width: 360,
+      title: '操作', width: 480,
       render: (_: unknown, record: User) => (
         <Space>
           <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)}>编辑</Button>
@@ -249,6 +296,14 @@ export default function Users() {
             <Button size="small" icon={<SafetyOutlined />} onClick={() => openPermissions(record)}>
               权限
             </Button>
+          )}
+          <Button size="small" icon={<KeyOutlined />} onClick={() => handleApiToken(record)}>
+            {record.apiToken ? '重置Token' : 'API Token'}
+          </Button>
+          {record.apiToken && (
+            <Popconfirm title={`删除用户 ${record.username} 的 API Token？`} onConfirm={() => handleDeleteApiToken(record.username)}>
+              <Button size="small">删除Token</Button>
+            </Popconfirm>
           )}
           {(record.mfa?.enabled || record.mfa?.configured) && (
             <Popconfirm
