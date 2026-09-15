@@ -76,7 +76,7 @@ function AppContent({ username, onLogout }: { username: string; onLogout: () => 
       <Sider width={220} theme="dark">
         <div className="app-logo">
           <div className="app-logo-icon">Y</div>
-          <span className="app-logo-text">YAML Sync</span>
+          <span className="app-logo-text">YamlSync</span>
         </div>
         <div className="menu-section-label">主菜单</div>
         <Menu

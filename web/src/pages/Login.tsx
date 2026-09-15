@@ -139,8 +139,8 @@ export default function Login({ onLogin }: Props) {
           }}>
             <span style={{ color: '#fff', fontSize: 24, fontWeight: 700 }}>Y</span>
           </div>
-          <h1 style={{ fontSize: 22, fontWeight: 700, color: '#1e293b', margin: 0 }}>YAML Sync</h1>
-          <p style={{ color: '#64748b', fontSize: 14, marginTop: 4 }}>GitLab ↔ Kubernetes 资源同步平台</p>
+          <h1 style={{ fontSize: 22, fontWeight: 700, color: '#1e293b', margin: 0 }}>YamlSync</h1>
+          <p style={{ color: '#64748b', fontSize: 14, marginTop: 4 }}>GitLab ↔ Kubernetes YAML 同步与配置管控平台</p>
         </div>
 
         {!mfaStep ? (
