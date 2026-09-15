@@ -666,9 +666,16 @@ func (s *userStore) UpsertFeishuUser(email, name, feishuUserID, feishuOpenID str
 	}
 
 	// No match — create a new password-less user with role=user and no permissions.
+	// Prefer email as username; fall back to name, then Feishu ids, to guarantee a value.
 	username := email
 	if username == "" {
 		username = name
+	}
+	if username == "" {
+		username = feishuUserID
+	}
+	if username == "" {
+		username = feishuOpenID
 	}
 	newUser := User{
 		Username:     username,

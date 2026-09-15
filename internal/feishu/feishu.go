@@ -70,12 +70,15 @@ type UserInfo struct {
 }
 
 // ExchangeCode exchanges an auth code for the logged-in user's info.
+// Step 1: code -> user_access_token (oidc/access_token).
+// Step 2: user_access_token -> user profile (authen/v1/user_info).
 func (c *Client) ExchangeCode(ctx context.Context, code string) (*UserInfo, error) {
 	appToken, err := c.appAccessToken(ctx)
 	if err != nil {
 		return nil, err
 	}
-	// Exchange code -> access_token + user identity.
+
+	// Step 1: exchange code for a user_access_token.
 	reqBody, _ := json.Marshal(map[string]string{
 		"grant_type": "authorization_code",
 		"code":       code,
@@ -95,13 +98,58 @@ func (c *Client) ExchangeCode(ctx context.Context, code string) (*UserInfo, erro
 		return nil, err
 	}
 	if tok.Code != 0 {
-		return nil, fmt.Errorf("feishu access_token error %d: %s", tok.Code, tok.Msg)
+		return nil, fmt.Errorf("换取 user_access_token 失败 %d: %s", tok.Code, tok.Msg)
 	}
-	return &UserInfo{
+	if tok.Data.AccessToken == "" {
+		return nil, fmt.Errorf("未获取到 user_access_token")
+	}
+
+	info := &UserInfo{
 		Name:   tok.Data.Name,
 		Email:  tok.Data.Email,
 		UserID: tok.Data.UserID,
 		OpenID: tok.Data.OpenID,
+	}
+
+	// Step 2: if the token response didn't carry profile fields, call user_info.
+	if info.Email == "" && info.OpenID == "" && info.UserID == "" {
+		ui, uerr := c.userInfo(ctx, tok.Data.AccessToken)
+		if uerr != nil {
+			return nil, uerr
+		}
+		info = ui
+	}
+	return info, nil
+}
+
+// userInfo fetches the logged-in user's profile using their user_access_token.
+func (c *Client) userInfo(ctx context.Context, userAccessToken string) (*UserInfo, error) {
+	var out struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+		Data struct {
+			Name         string `json:"name"`
+			Email        string `json:"email"`
+			EnterpriseEmail string `json:"enterprise_email"`
+			UserID       string `json:"user_id"`
+			OpenID       string `json:"open_id"`
+		} `json:"data"`
+	}
+	if err := c.getJSON(ctx, "/open-apis/authen/v1/user_info", userAccessToken, &out); err != nil {
+		return nil, err
+	}
+	if out.Code != 0 {
+		return nil, fmt.Errorf("获取用户信息失败 %d: %s", out.Code, out.Msg)
+	}
+	email := out.Data.Email
+	if email == "" {
+		email = out.Data.EnterpriseEmail
+	}
+	return &UserInfo{
+		Name:   out.Data.Name,
+		Email:  email,
+		UserID: out.Data.UserID,
+		OpenID: out.Data.OpenID,
 	}, nil
 }
 
@@ -138,6 +186,23 @@ func (c *Client) SendText(ctx context.Context, openID, userID, text string) erro
 		return fmt.Errorf("feishu send message error %d: %s", out.Code, out.Msg)
 	}
 	return nil
+}
+
+func (c *Client) getJSON(ctx context.Context, path, bearer string, out interface{}) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+path, nil)
+	if err != nil {
+		return err
+	}
+	if bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(resp.Body)
+	return json.Unmarshal(data, out)
 }
 
 func (c *Client) postJSON(ctx context.Context, path, bearer string, body []byte, out interface{}) error {
